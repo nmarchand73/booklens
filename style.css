@@ -33,6 +33,8 @@ body {
   height: 100dvh;
   max-width: 500px;
   margin: 0 auto;
+  padding-left: max(0px, env(safe-area-inset-left));
+  padding-right: max(0px, env(safe-area-inset-right));
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
@@ -1915,6 +1917,155 @@ header {
   }
   .sheet-cta-row {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ── Téléphone : gagner de la place pour la photo et le scan ─────────────── */
+@media (max-width: 520px) {
+  body {
+    font-size: 14px;
+  }
+
+  header {
+    padding: 6px 10px;
+    padding-top: max(6px, env(safe-area-inset-top));
+    min-height: 0;
+  }
+  .logo {
+    font-size: 15px;
+  }
+  .icon-btn {
+    padding: 8px 10px;
+    min-width: 42px;
+    min-height: 42px;
+    font-size: 18px;
+  }
+
+  #viewport {
+    min-height: 100px;
+  }
+
+  .viewport-empty {
+    gap: 6px;
+    padding: 14px 12px;
+  }
+  .viewport-empty-ico {
+    font-size: 34px;
+  }
+  .viewport-empty-title {
+    font-size: 15px;
+  }
+  .viewport-empty-hint {
+    font-size: 12px;
+    max-width: none;
+    padding: 0 4px;
+  }
+
+  .phase-strip {
+    padding: 6px 10px 7px;
+  }
+  #status {
+    font-size: 13px;
+    margin-bottom: 2px;
+    line-height: 1.25;
+  }
+  .phase-hint {
+    font-size: 10px;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  #controls {
+    gap: 12px;
+    padding: 8px 8px 10px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .controls-spacer {
+    min-width: 44px;
+  }
+  .main-btn-wrap {
+    gap: 4px;
+    min-width: 64px;
+  }
+  .main-caption {
+    font-size: 10px;
+  }
+  .main-ring {
+    width: 56px;
+    height: 56px;
+    font-size: 22px;
+    box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.16), 0 3px 12px rgba(249, 115, 22, 0.28);
+  }
+  .side-btn {
+    gap: 2px;
+    padding: 6px 8px;
+    min-width: 52px;
+    min-height: 48px;
+  }
+  .btn-icon {
+    font-size: 20px;
+  }
+  .btn-label {
+    font-size: 10px;
+  }
+  .btn-sublabel {
+    display: none;
+  }
+
+  .results-drawer-head {
+    padding: 4px 8px 4px 10px;
+  }
+  .results-drawer-toggle {
+    padding: 8px 6px;
+    gap: 8px;
+  }
+  .drawer-grip {
+    width: 32px;
+  }
+  .results-drawer-title {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+
+  /* Plus d’espace pour l’image : le tiroir prend moins de hauteur */
+  .results-drawer.has-results {
+    flex: 1 1 28%;
+    max-height: min(36vh, 400px);
+  }
+
+  .book-card {
+    padding: 10px 10px 8px;
+  }
+  .book-thumb {
+    width: 52px;
+    height: 76px;
+  }
+  .book-title {
+    font-size: 14px;
+  }
+
+  #book-overlay {
+    padding: 24px 0 8px;
+  }
+  .overlay-footnote {
+    padding: 6px 10px 8px;
+    font-size: 10px;
+  }
+}
+
+/* Très petit écran : encore un peu plus pour la zone caméra */
+@media (max-width: 380px) {
+  #controls {
+    gap: 8px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .results-drawer.has-results {
+    flex: 1 1 24%;
+    max-height: min(32vh, 340px);
   }
 }
 
