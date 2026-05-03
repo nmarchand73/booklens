@@ -2159,8 +2159,12 @@ header {
 }
 .btn-wishlist-clear {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 12px;
-  min-height: 40px;
+  min-height: 44px;
+  min-width: 44px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
