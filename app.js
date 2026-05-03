@@ -36,6 +36,7 @@ const canvas       = $('canvas');
 const scanPixelLayer = $('scan-pixel-layer');
 const previewEl    = $('preview');
 const previewBack  = $('preview-back');
+const viewportPhotoChrome = $('viewport-photo-chrome');
 const viewportEmpty = $('viewport-empty');
 const scanBtn      = $('scan-btn');
 const uploadBtn    = $('upload-btn');
@@ -70,6 +71,74 @@ const splitTop = $('split-top');
 const splitGutter = $('split-gutter');
 const vp           = $('viewport');
 const arLayer      = $('ar-layer');
+const zoomRoot     = $('viewport-zoom-root');
+const zoomPan      = $('viewport-zoom-pan');
+const zoomScaler   = $('viewport-zoom-scaler');
+const zoomControls = $('viewport-zoom-controls');
+const zoomInBtn    = $('zoom-in-btn');
+const zoomOutBtn   = $('zoom-out-btn');
+const zoomResetBtn = $('zoom-reset-btn');
+
+/** Zoom / pan sur la photo (roulette, boutons, glisser souris, 1 doigt tactile, pincement 2 doigts). */
+const PHOTO_ZOOM_MIN = 0.92;
+const PHOTO_ZOOM_MAX = 5;
+const photoZoom = { s: 1, tx: 0, ty: 0 };
+let photoDrag = null;
+let photoPinch = null;
+let photoTouchPan = null;
+
+function syncViewportHasPhoto() {
+  const on = !!(uploadedImg && !previewEl.classList.contains('hidden'));
+  vp.classList.toggle('has-photo', on);
+  if (zoomControls) {
+    zoomControls.classList.toggle('hidden', !on);
+    zoomControls.setAttribute('aria-hidden', String(!on));
+  }
+}
+
+function applyPhotoZoom() {
+  if (!zoomPan || !zoomScaler) return;
+  zoomPan.style.transform = `translate3d(${photoZoom.tx}px, ${photoZoom.ty}px, 0)`;
+  zoomScaler.style.transform = `scale(${photoZoom.s})`;
+  scheduleArReflow();
+}
+
+function clampPhotoZoomPan() {
+  if (!zoomRoot) return;
+  const w = zoomRoot.clientWidth;
+  const h = zoomRoot.clientHeight;
+  if (w < 2 || h < 2) return;
+  if (Math.abs(photoZoom.s - 1) < 0.02) {
+    photoZoom.s = 1;
+    photoZoom.tx = 0;
+    photoZoom.ty = 0;
+    return;
+  }
+  const maxX = (w * Math.abs(photoZoom.s - 1)) / 2;
+  const maxY = (h * Math.abs(photoZoom.s - 1)) / 2;
+  photoZoom.tx = Math.min(maxX, Math.max(-maxX, photoZoom.tx));
+  photoZoom.ty = Math.min(maxY, Math.max(-maxY, photoZoom.ty));
+}
+
+function resetPhotoZoom() {
+  photoZoom.s = 1;
+  photoZoom.tx = 0;
+  photoZoom.ty = 0;
+  photoDrag = null;
+  photoPinch = null;
+  photoTouchPan = null;
+  applyPhotoZoom();
+}
+
+function nudgePhotoZoom(factor) {
+  photoZoom.s = Math.min(PHOTO_ZOOM_MAX, Math.max(PHOTO_ZOOM_MIN, photoZoom.s * factor));
+  clampPhotoZoomPan();
+  applyPhotoZoom();
+}
+
+function endPhotoDrag(e) {
+  if (photoDrag && e.pointerId === photoDrag.pid) photoDrag = null;
+}
 
 /** Recalcule les cadres RA après resize (layout souvent stable après 2 frames). */
 function scheduleArReflow() {
@@ -2138,14 +2207,17 @@ function loadFile(file) {
     uploadedImg = img;
     previewEl.src = url;
     previewEl.classList.remove('hidden');
-    previewBack.classList.remove('hidden');
+    viewportPhotoChrome?.classList.remove('hidden');
+    viewportPhotoChrome?.setAttribute('aria-hidden', 'false');
     if (viewportEmpty) {
       viewportEmpty.classList.add('hidden');
       viewportEmpty.setAttribute('aria-hidden', 'true');
     }
+    syncViewportHasPhoto();
+    resetPhotoZoom();
     syncMainControlLabel();
     setStatus('Photo prête — touchez Envoyer pour analyser');
-    setHint('Autre image : bouton central (appareil photo), Importer (photothèque / fichier), ou « Autre photo ».');
+    setHint('Autre image : bouton central (appareil photo), Importer (photothèque / fichier), ou « Autre photo ». Roulette ou +/- pour zoomer.');
   };
   img.src = url;
 }
@@ -2155,11 +2227,14 @@ function resetPhotoState() {
   uploadedImg = null;
   previewEl.classList.add('hidden');
   previewEl.removeAttribute('src');
-  previewBack.classList.add('hidden');
+  viewportPhotoChrome?.classList.add('hidden');
+  viewportPhotoChrome?.setAttribute('aria-hidden', 'true');
   if (viewportEmpty) {
     viewportEmpty.classList.remove('hidden');
     viewportEmpty.setAttribute('aria-hidden', 'false');
   }
+  syncViewportHasPhoto();
+  resetPhotoZoom();
   syncMainControlLabel();
   clearArLayer();
   setStatus(STATUS_IDLE_NO_IMAGE);
@@ -2292,6 +2367,129 @@ window.addEventListener('orientationchange', () => {
 });
 
 initSplitPaneResize();
+
+function initPhotoZoomHandlers() {
+  if (!zoomRoot || !zoomPan || !zoomScaler) return;
+
+  zoomRoot.addEventListener('wheel', (e) => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    e.preventDefault();
+    const dir = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+    nudgePhotoZoom(dir);
+  }, { passive: false });
+
+  zoomInBtn?.addEventListener('click', () => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    nudgePhotoZoom(1.15);
+  });
+  zoomOutBtn?.addEventListener('click', () => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    nudgePhotoZoom(1 / 1.15);
+  });
+  zoomResetBtn?.addEventListener('click', () => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    resetPhotoZoom();
+  });
+
+  zoomRoot.addEventListener('pointerdown', (e) => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    if (e.button !== 0) return;
+    if (e.target.closest('.viewport-zoom-controls')) return;
+    if (photoPinch) return;
+    if (photoZoom.s <= 1.02 && photoZoom.s >= 0.98) return;
+    photoDrag = {
+      pid: e.pointerId,
+      x0: e.clientX,
+      y0: e.clientY,
+      tx0: photoZoom.tx,
+      ty0: photoZoom.ty,
+    };
+    try {
+      zoomRoot.setPointerCapture(e.pointerId);
+    } catch (_) { /* noop */ }
+  });
+
+  zoomRoot.addEventListener('pointermove', (e) => {
+    if (!photoDrag || photoDrag.pid !== e.pointerId || photoPinch) return;
+    photoZoom.tx = photoDrag.tx0 + (e.clientX - photoDrag.x0);
+    photoZoom.ty = photoDrag.ty0 + (e.clientY - photoDrag.y0);
+    clampPhotoZoomPan();
+    zoomPan.style.transform = `translate3d(${photoZoom.tx}px, ${photoZoom.ty}px, 0)`;
+    scheduleArReflow();
+  });
+
+  zoomRoot.addEventListener('pointerup', endPhotoDrag);
+  zoomRoot.addEventListener('pointercancel', endPhotoDrag);
+
+  function pinchDist(t0, t1) {
+    const dx = t0.clientX - t1.clientX;
+    const dy = t0.clientY - t1.clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  zoomRoot.addEventListener('touchstart', (e) => {
+    if (!vp.classList.contains('has-photo') || busy) return;
+    if (e.touches.length === 2) {
+      photoTouchPan = null;
+      const d0 = pinchDist(e.touches[0], e.touches[1]);
+      photoPinch = {
+        d0: Math.max(8, d0),
+        s0: photoZoom.s,
+        tx0: photoZoom.tx,
+        ty0: photoZoom.ty,
+      };
+      photoDrag = null;
+      return;
+    }
+    if (e.touches.length === 1 && !photoPinch && (photoZoom.s > 1.02 || photoZoom.s < 0.98)) {
+      const t = e.touches[0];
+      photoTouchPan = {
+        x0: t.clientX,
+        y0: t.clientY,
+        tx0: photoZoom.tx,
+        ty0: photoZoom.ty,
+      };
+    }
+  }, { passive: true });
+
+  zoomRoot.addEventListener('touchmove', (e) => {
+    if (photoPinch && e.touches.length === 2) {
+      e.preventDefault();
+      const d = Math.max(4, pinchDist(e.touches[0], e.touches[1]));
+      photoZoom.s = Math.min(PHOTO_ZOOM_MAX, Math.max(PHOTO_ZOOM_MIN, photoPinch.s0 * (d / photoPinch.d0)));
+      photoZoom.tx = photoPinch.tx0;
+      photoZoom.ty = photoPinch.ty0;
+      clampPhotoZoomPan();
+      applyPhotoZoom();
+      return;
+    }
+    if (photoTouchPan && e.touches.length === 1 && !photoPinch) {
+      e.preventDefault();
+      const t = e.touches[0];
+      photoZoom.tx = photoTouchPan.tx0 + (t.clientX - photoTouchPan.x0);
+      photoZoom.ty = photoTouchPan.ty0 + (t.clientY - photoTouchPan.y0);
+      clampPhotoZoomPan();
+      applyPhotoZoom();
+    }
+  }, { passive: false });
+
+  zoomRoot.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) photoPinch = null;
+    if (e.touches.length === 0) photoTouchPan = null;
+  });
+  zoomRoot.addEventListener('touchcancel', () => {
+    photoPinch = null;
+    photoTouchPan = null;
+  });
+
+  const zro = new ResizeObserver(() => {
+    clampPhotoZoomPan();
+    applyPhotoZoom();
+  });
+  zro.observe(zoomRoot);
+}
+
+initPhotoZoomHandlers();
 
 document.addEventListener('paste', e => {
   const item = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));

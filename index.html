@@ -65,13 +65,35 @@
     <div id="split-top" class="split-top">
   <div id="viewport">
     <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
-      <span class="viewport-empty-ico" aria-hidden="true">📷</span>
-      <p class="viewport-empty-title">Couverture du livre ou rayon livres</p>
+      <div class="viewport-empty-inner">
+        <span class="viewport-empty-ico" aria-hidden="true">📷</span>
+        <p class="viewport-empty-kicker">Appareil photo ou import</p>
+        <h2 class="viewport-empty-title">
+          <span class="viewport-empty-line1">Couverture du livre</span>
+          <span class="viewport-empty-line2">ou rayon livres</span>
+        </h2>
+      </div>
     </div>
-    <img id="preview" class="hidden" alt="Photo à analyser">
+    <div id="viewport-zoom-root" class="viewport-zoom-root">
+      <div id="viewport-zoom-pan" class="viewport-zoom-pan">
+        <div id="viewport-zoom-scaler" class="viewport-zoom-scaler">
+          <img id="preview" class="hidden" alt="Photo à analyser">
+        </div>
+      </div>
+      <div id="viewport-zoom-controls" class="viewport-zoom-controls hidden" aria-hidden="true">
+        <button type="button" id="zoom-out-btn" class="zoom-ctrl-btn" title="Zoom arrière" aria-label="Zoom arrière">−</button>
+        <button type="button" id="zoom-in-btn" class="zoom-ctrl-btn" title="Zoom avant" aria-label="Zoom avant">+</button>
+        <button type="button" id="zoom-reset-btn" class="zoom-ctrl-btn zoom-ctrl-btn--reset" title="Zoom 1:1" aria-label="Réinitialiser le zoom">1:1</button>
+      </div>
+    </div>
     <canvas id="canvas" class="hidden"></canvas>
     <canvas id="scan-pixel-layer" class="hidden" aria-hidden="true"></canvas>
-    <button type="button" id="preview-back" class="preview-back hidden">↩ Autre photo</button>
+    <div id="viewport-photo-chrome" class="viewport-photo-chrome hidden" aria-hidden="true">
+      <button type="button" id="preview-back" class="preview-back">
+        <span class="preview-back-ico" aria-hidden="true">←</span>
+        <span class="preview-back-label">Autre photo</span>
+      </button>
+    </div>
 
     <!-- Repères RA : cadres alignés sur les livres détectés (bbox du modèle) -->
     <div id="ar-layer" class="ar-layer hidden" aria-hidden="true"></div>
