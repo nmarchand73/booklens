@@ -1,28 +1,38 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:      #0d0d0d;
-  --surface: #1a1a1a;
-  --surf2:   #242424;
-  --surf3:   #2e2e2e;
+  /* Canvas: true black + lifted surfaces (HWF-inspired, not a pixel clone) */
+  --bg:      #000000;
+  --surface: #141414;
+  --surf2:   #1a1a1a;
+  --surf3:   #242424;
   --accent:  #f97316;
-  --text:    #f0f0f0;
-  --muted:   #8a8a8a;
-  --border:  rgba(255,255,255,.07);
-  --r:       14px;
-  --r-sm:    9px;
-  --r-xs:    5px;
+  --text:    #ececec;
+  --muted:   #9ca3af;
+  --border:  rgba(255,255,255,.08);
+  --r:       16px;
+  --r-sm:    10px;
+  --r-xs:    6px;
+  --r-pill:  9999px;
+  /* Mood accents for sheet chips, glows, secondary emphasis (reference UI palette) */
+  --mood-mint:     #5eead4;
+  --mood-gold:     #fcd34d;
+  --mood-lavender: #c4b5fd;
+  --mood-sky:      #7dd3fc;
+  --mood-coral:    #fb7185;
   /* Spacing rhythm (DESIGN-SYSTEM.md): prefer 4/8/12/16/24 */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  /* Sheet typography tokens (loaded fonts in index.html) */
+  /* Typography: Outfit shell + sheet UI; Fraunces display (fonts in index.html) */
   --sheet-ui: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --shell-ui: var(--sheet-ui);
   --sheet-display: 'Fraunces', Georgia, 'Times New Roman', serif;
-  --sheet-line: rgba(255, 255, 255, 0.06);
-  --sheet-glow: rgba(249, 115, 22, 0.12);
+  --sheet-line: rgba(255, 255, 255, 0.07);
+  --sheet-glow: rgba(94, 234, 212, 0.08);
+  --cta-on-accent: #0a0a0a;
 }
 
 html {
@@ -34,8 +44,8 @@ html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 15px;
+  font-family: var(--shell-ui);
+  font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -128,7 +138,14 @@ header {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.logo { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
+.logo {
+  font-family: var(--sheet-display);
+  font-size: 18px;
+  font-weight: 700;
+  font-variation-settings: 'opsz' 72;
+  letter-spacing: -0.02em;
+  font-style: italic;
+}
 
 .header-actions {
   display: flex;
@@ -209,7 +226,10 @@ header {
   gap: 10px;
   padding: 24px;
   text-align: center;
-  background: linear-gradient(165deg, #141414 0%, #0a0a0a 100%);
+  background:
+    radial-gradient(ellipse 85% 55% at 18% 12%, rgba(94, 234, 212, 0.12) 0%, transparent 52%),
+    radial-gradient(ellipse 70% 50% at 88% 22%, rgba(252, 211, 77, 0.1) 0%, transparent 48%),
+    linear-gradient(165deg, #0f0f0f 0%, var(--bg) 100%);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -716,7 +736,9 @@ header {
   padding: 11px 12px 10px;
   background: var(--surf2);
   border-radius: var(--r-sm);
-  border-left: 3px solid var(--accent);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .critique-label {
   font-size: 10px;
@@ -1004,7 +1026,13 @@ header {
   margin: 0 auto 20px;
   opacity: .3;
 }
-.modal-sheet h2 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+.modal-sheet h2 {
+  font-family: var(--shell-ui);
+  font-size: 18px;
+  font-weight: 800;
+  margin-bottom: 20px;
+  letter-spacing: -0.02em;
+}
 
 .field { margin-bottom: 16px; }
 .field label {
@@ -1086,19 +1114,30 @@ header {
 #interval-label { font-size: 15px; font-weight: 700; color: var(--accent); width: 30px; }
 
 .btn-primary {
-  display: block; width: 100%;
-  padding: 15px;
-  background: var(--accent);
-  color: #fff;
+  display: block;
+  width: 100%;
+  padding: 15px 18px;
+  background: #fafafa;
+  color: var(--cta-on-accent);
   border: none;
-  border-radius: var(--r);
+  border-radius: var(--r-pill);
+  font-family: var(--shell-ui);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.01em;
   cursor: pointer;
   margin-top: 10px;
-  letter-spacing: .02em;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.15s ease;
 }
-.btn-primary:active { opacity: .85; }
+.btn-primary:active {
+  transform: scale(0.99);
+  filter: brightness(0.96);
+}
+.btn-primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 
 /* ── Fiche livre (full-screen sheet mobile) ───────────────────────────────── */
 .book-sheet {
@@ -1144,9 +1183,11 @@ header {
   margin: 0 auto;
   font-family: var(--sheet-ui);
   background:
-    radial-gradient(120% 80% at 50% -15%, rgba(249, 115, 22, 0.14) 0%, transparent 48%),
-    linear-gradient(185deg, #1c1c1e 0%, var(--bg) 28%, var(--bg) 100%);
-  border-radius: 24px 24px 0 0;
+    radial-gradient(95% 70% at 12% -8%, rgba(94, 234, 212, 0.14) 0%, transparent 45%),
+    radial-gradient(80% 55% at 92% 4%, rgba(252, 211, 77, 0.1) 0%, transparent 42%),
+    radial-gradient(120% 80% at 50% -15%, rgba(249, 115, 22, 0.1) 0%, transparent 48%),
+    linear-gradient(185deg, #151515 0%, var(--bg) 32%, var(--bg) 100%);
+  border-radius: 28px 28px 0 0;
   box-shadow:
     0 -24px 80px rgba(0, 0, 0, 0.75),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
@@ -1255,7 +1296,7 @@ header {
   font-weight: 800;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--mood-mint);
   margin: 0 0 6px;
 }
 
@@ -1503,9 +1544,15 @@ header {
   transform: scale(0.98);
 }
 .sheet-cta--primary {
-  background: linear-gradient(165deg, #fb923c 0%, var(--accent) 55%, #ea580c 100%);
-  color: #111;
-  box-shadow: 0 10px 28px rgba(249, 115, 22, 0.35);
+  background: #fafafa;
+  color: var(--cta-on-accent);
+  border-radius: var(--r-pill);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.sheet-cta--primary .sheet-cta-ico {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--cta-on-accent);
 }
 .sheet-cta--ghost {
   background: rgba(255, 255, 255, 0.05);
@@ -1811,9 +1858,10 @@ header {
 .sheet-pullquote {
   margin: 0;
   padding: 14px 16px 16px;
-  border-radius: 14px;
-  border-left: 4px solid var(--accent);
-  background: rgba(0, 0, 0, 0.22);
+  border-radius: 18px;
+  border: 1px solid var(--sheet-line);
+  border-top: 3px solid var(--mood-gold);
+  background: rgba(0, 0, 0, 0.28);
 }
 .sheet-pullquote .sheet-field-label {
   margin-bottom: 8px;
