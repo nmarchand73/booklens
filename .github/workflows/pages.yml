@@ -1,5 +1,11 @@
-# Publie le site statique sur GitHub Pages (contenu minimal, sans le dépôt entier).
-# Après le premier déploiement : Settings → Pages → Source = GitHub Actions.
+# Publie le site statique sur GitHub Pages (bundle minimal : index, CSS, JS, img).
+#
+# Prérequis UNE FOIS sur GitHub :
+#   Settings → Pages → Build and deployment → Source : « GitHub Actions »
+# (pas « Deploy from a branch »). Sinon l’API Pages renvoie 404 et le déploiement échoue.
+#
+# Pas d’étape actions/configure-pages ici : elle sert aux SSG (Next/Nuxt…) et exige
+# un site Pages déjà créé ; pour du HTML statique elle est inutile.
 name: Deploy GitHub Pages
 
 on:
@@ -30,8 +36,6 @@ jobs:
           mkdir -p _site
           cp index.html style.css app.js _site/
           cp -r img _site/
-
-      - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
