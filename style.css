@@ -2238,7 +2238,12 @@ header {
 }
 .wishlist-remove-btn {
   flex-shrink: 0;
-  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
