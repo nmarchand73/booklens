@@ -14,7 +14,7 @@ let busy        = false;
 let uploadedImg = null;
 /** Dimensions de la frame réellement envoyée à Claude (canvas). */
 let lastCaptureSize = { w: 0, h: 0 };
-/** Dimensions natives de la photo source — repère pour object-fit: cover (RA). */
+/** Dimensions natives de la photo source — repère pour object-fit: contain (RA). */
 let lastSourceSize = { w: 0, h: 0 };
 /** Derniers livres pour recalcul RA au resize. */
 let lastBooksForAr = [];
@@ -1329,8 +1329,6 @@ function buildSheetFactsStrip(book) {
   } else if (ar != null) {
     chips.push(`<span class="sheet-fact-chip">GB ★ ${Number(ar).toFixed(1)}</span>`);
   }
-  const isbn = pickPrimaryIsbn(vi);
-  if (isbn) chips.push(`<span class="sheet-fact-chip sheet-fact-chip--mono">ISBN ${esc(isbn)}</span>`);
 
   const catLeaves = [];
   const seen = new Set();
@@ -1351,33 +1349,12 @@ function buildSheetFactsStrip(book) {
   const rows = chips.length
     ? `<div class="sheet-facts-row">${chips.join('')}</div>`
     : '';
-  const inner = rows || catsHtml
+  const inner = (rows || catsHtml)
     ? `<div class="sheet-facts-inner">${rows}${catsHtml}</div>`
-    : `<div class="sheet-meta-callout sheet-meta-callout--warn" role="status">
-      <span class="sheet-meta-callout-ico" aria-hidden="true"></span>
-      <div class="sheet-meta-callout-text">
-        <span class="sheet-meta-callout-title">Infos édition incomplètes</span>
-        <span class="sheet-meta-callout-detail">Pas d’ISBN ni détails catalogue pour l’instant — correspondance basée sur la photo et la reconnaissance du titre.</span>
-      </div>
-    </div>`;
+    : '';
 
+  if (!inner) return '';
   return `<div id="sheet-facts" class="sheet-facts" aria-label="Informations édition">${inner}</div>`;
-}
-
-function buildSheetMetricsBlock(book) {
-  const displayNote = book.note ?? book.info?.averageRating;
-  const conf = book.confidence || 'medium';
-  const confClass = ['high', 'medium', 'low'].includes(conf) ? conf : 'medium';
-  const metricPieces = [];
-  if (displayNote != null && displayNote !== '') {
-    metricPieces.push(`<div class="sheet-metric sheet-metric--star"><span class="sheet-metric-val">${Number(displayNote).toFixed(1)}</span><span class="sheet-metric-lbl">Note</span></div>`);
-  }
-  metricPieces.push(`<div class="sheet-metric sheet-metric--signal"><span class="sheet-metric-val sheet-metric-val--signal conf-dot-${confClass}" title="Fiabilité de la correspondance titre / auteur"></span><span class="sheet-metric-lbl">${esc(CONF_LABEL[conf] || conf)}</span></div>`);
-  const solo = metricPieces.length === 1;
-  const gridClass = solo
-    ? 'sheet-metrics sheet-metrics--compact sheet-metrics--solo'
-    : 'sheet-metrics sheet-metrics--compact';
-  return `<div id="sheet-metrics" class="${gridClass}" role="group" aria-label="Indicateurs">${metricPieces.join('')}</div>`;
 }
 
 function buildSheetCritiqueBodyHtml(book, llmPending) {
@@ -1532,10 +1509,26 @@ function buildSheetCritiqueSection(book, llmPending) {
 
 function applySheetLlmDomPatch(book, gen) {
   if (gen !== bookSheetLoadGen) return;
+  const newFacts = buildSheetFactsStrip(book);
   const factsEl = $('sheet-facts');
-  if (factsEl) factsEl.outerHTML = buildSheetFactsStrip(book);
+  if (newFacts) {
+    if (factsEl) {
+      factsEl.outerHTML = newFacts;
+    } else {
+      const wl = document.querySelector('.sheet-wishlist-row');
+      if (wl) {
+        const hero = document.querySelector('.sheet-hero-status');
+        if (hero) hero.insertAdjacentHTML('beforeend', newFacts);
+        else wl.insertAdjacentHTML('afterend', `<div class="sheet-hero-status">${newFacts}</div>`);
+      }
+    }
+  } else if (factsEl) {
+    const hero = factsEl.closest('.sheet-hero-status');
+    factsEl.remove();
+    if (hero && hero.childElementCount === 0) hero.remove();
+  }
   const m = $('sheet-metrics');
-  if (m) m.outerHTML = buildSheetMetricsBlock(book);
+  if (m) m.remove();
   const kick = document.querySelector('.sheet-kicker');
   if (kick) kick.textContent = book.genre ? book.genre : 'Livre';
   const r = $('sheet-reader-host');
@@ -1624,7 +1617,9 @@ function renderSheetShell(book, gen, opts = {}) {
   </div>`;
 
   const factsHtml = buildSheetFactsStrip(book);
-  const metricsHtml = buildSheetMetricsBlock(book);
+  const heroStatusHtml = factsHtml
+    ? `<div class="sheet-hero-status">${factsHtml}</div>`
+    : '';
   const readerSectionHtml = buildSheetReaderSection(book, llmPending);
   const critiqueSectionHtml = buildSheetCritiqueSection(book, llmPending);
 
@@ -1660,10 +1655,7 @@ function renderSheetShell(book, gen, opts = {}) {
           ${subtitleHtml}
           <p class="sheet-byline sheet-byline--compact">Par <strong>${authorNameHtml}</strong></p>
           ${wishlistBtnHtml}
-          <div class="sheet-hero-status">
-            ${metricsHtml}
-            ${factsHtml}
-          </div>
+          ${heroStatusHtml}
         </div>
       </header>
 
@@ -1913,7 +1905,7 @@ function getVisibleCaptureMedia() {
 /**
  * bbox normalisé 0–1 (coin haut-gauche du livre dans la frame analysée) → pixels dans #ar-layer.
  * Les fractions x/y/w/h correspondent aux axes de la source native (vidéo ou photo), comme après
- * drawImage plein cadre. Projette avec les dimensions source srcW×srcH et object-fit: cover.
+ * drawImage plein cadre. Projette avec les dimensions source srcW×srcH et object-fit: contain (#preview).
  */
 function bboxToArLayerPx(bb, srcW, srcH, mediaEl, layerEl) {
   const lr = layerEl.getBoundingClientRect();
@@ -1922,7 +1914,7 @@ function bboxToArLayerPx(bb, srcW, srcH, mediaEl, layerEl) {
   const boxH = mr.height;
   if (!srcW || !srcH || boxW < 2 || boxH < 2) return null;
 
-  const scale = Math.max(boxW / srcW, boxH / srcH);
+  const scale = Math.min(boxW / srcW, boxH / srcH);
   const dispW = srcW * scale;
   const dispH = srcH * scale;
   const originX = mr.left - lr.left;

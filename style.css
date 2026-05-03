@@ -344,6 +344,9 @@ header {
   transform-origin: center center;
   image-rendering: crisp-edges;
   filter: grayscale(1) contrast(1.1) brightness(0.96);
+  /* Même logique que #preview : image entière, pas d’étirement/crop du bitmap. */
+  object-fit: contain;
+  object-position: center center;
 }
 
 #viewport.scanning #scan-pixel-layer:not(.hidden) {
@@ -463,10 +466,12 @@ header {
 }
 
 #viewport:fullscreen #preview:not(.hidden),
-#viewport:-webkit-full-screen #preview:not(.hidden) {
+#viewport:-webkit-full-screen #preview:not(.hidden),
+#viewport:fullscreen #scan-pixel-layer:not(.hidden),
+#viewport:-webkit-full-screen #scan-pixel-layer:not(.hidden) {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center center;
 }
 
@@ -587,7 +592,7 @@ header {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center center;
   display: block;
   z-index: 1;
