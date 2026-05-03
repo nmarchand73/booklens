@@ -37,6 +37,67 @@ body {
   padding-right: max(0px, env(safe-area-inset-right));
 }
 
+/* ── Zone haut (caméra / contrôles) + bas (résultats), séparateur redimensionnable ─ */
+.split-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.split-top {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.split-top #viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.split-gutter {
+  flex-shrink: 0;
+  height: 11px;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+  cursor: ns-resize;
+  touch-action: none;
+  background: var(--surf2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+}
+.split-gutter::after {
+  content: '';
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--muted);
+  opacity: 0.45;
+}
+.split-gutter:hover::after,
+.split-gutter:focus-visible::after {
+  opacity: 0.75;
+}
+.split-gutter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.split-root.split-gutter--disabled .split-gutter {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.split-root.split-gutter-active .split-gutter {
+  background: var(--surf3);
+}
+
 /* ── Header ───────────────────────────────────────────────────────────────── */
 header {
   display: flex;
@@ -2067,6 +2128,17 @@ header {
     flex: 1 1 24%;
     max-height: min(32vh, 340px);
   }
+}
+
+/* Répartition manuelle (JS) : priorité sur flex / max-height du tiroir */
+.split-root.split-custom .split-top {
+  flex: 0 0 auto !important;
+  overflow: hidden;
+}
+.split-root.split-custom .results-drawer,
+.split-root.split-custom .results-drawer.has-results {
+  flex: 0 0 auto !important;
+  max-height: none !important;
 }
 
 .sheet-author-card {

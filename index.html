@@ -61,6 +61,8 @@
     </div>
   </header>
 
+  <div id="split-root" class="split-root">
+    <div id="split-top" class="split-top">
   <div id="viewport">
     <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
       <span class="viewport-empty-ico" aria-hidden="true">📷</span>
@@ -104,6 +106,18 @@
     </div>
     <div class="controls-spacer" aria-hidden="true"></div>
   </div>
+    </div>
+
+  <div
+    id="split-gutter"
+    class="split-gutter"
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Redimensionner la zone photo et la zone résultats"
+    aria-valuemin="8"
+    aria-valuemax="92"
+    tabindex="0"
+  ></div>
 
   <input type="file" id="file-input-camera" accept="image/*" capture="environment" class="hidden">
   <input type="file" id="file-input-gallery" accept="image/*" class="hidden">
@@ -123,6 +137,7 @@
       </div>
       <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
     </div>
+  </div>
   </div>
 </div>
 
