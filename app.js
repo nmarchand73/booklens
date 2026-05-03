@@ -25,9 +25,81 @@ let cachedEnrichedBooks = [];
 let bookSheetLoadGen = 0;
 /** Fiche ouverte depuis une suggestion (hors liste de scan). */
 let sheetDetachedBook = null;
+/** Pile des fiches pour « retour » (carte → autre carte, fiche → livre similaire, etc.). */
+let bookSheetHistoryStack = [];
+
+function cloneBookForSheetHistory(book) {
+  if (!book || typeof book !== 'object') return book;
+  try {
+    if (typeof structuredClone === 'function') return structuredClone(book);
+  } catch { /* fallthrough */ }
+  try {
+    return JSON.parse(JSON.stringify(book));
+  } catch {
+    return { ...book, info: book.info && typeof book.info === 'object' ? { ...book.info } : book.info };
+  }
+}
+
+function captureSheetHistoryEntry() {
+  const sheet = $('book-sheet');
+  if (!sheet || sheet.classList.contains('hidden')) return null;
+  if (sheetDetachedBook && typeof sheetDetachedBook === 'object') {
+    return { kind: 'detached', book: cloneBookForSheetHistory(sheetDetachedBook) };
+  }
+  const idx = parseInt(sheet.dataset.sheetBookIdx ?? '', 10);
+  if (Number.isFinite(idx) && cachedEnrichedBooks[idx]) return { kind: 'idx', idx };
+  return null;
+}
+
+function pushSheetHistoryIfOpen() {
+  const entry = captureSheetHistoryEntry();
+  if (entry) bookSheetHistoryStack.push(entry);
+}
+
+function updateBookSheetBackButton() {
+  const btn = $('book-sheet-back');
+  if (!btn) return;
+  const show = bookSheetHistoryStack.length > 0;
+  btn.classList.toggle('hidden', !show);
+  btn.setAttribute('aria-hidden', show ? 'false' : 'true');
+}
+
+function popBookSheetHistory() {
+  if (!bookSheetHistoryStack.length) return;
+  const entry = bookSheetHistoryStack.pop();
+  const sheet = $('book-sheet');
+  if (!sheet || sheet.classList.contains('hidden')) return;
+
+  bookSheetLoadGen += 1;
+  const gen = bookSheetLoadGen;
+
+  if (entry.kind === 'detached') {
+    sheetDetachedBook = entry.book;
+    delete sheet.dataset.sheetBookIdx;
+  } else {
+    sheetDetachedBook = null;
+    sheet.dataset.sheetBookIdx = String(entry.idx);
+  }
+
+  const book = getSheetBook();
+  if (!book) {
+    updateBookSheetBackButton();
+    return;
+  }
+
+  const idx = entry.kind === 'idx' ? entry.idx : null;
+  const llmPending = !!(apiKey && !book._sheetLlmFetched);
+  renderSheetShell(book, gen, { llmPending });
+  const scrollEl = $('book-sheet-scroll');
+  if (scrollEl) scrollEl.scrollTop = 0;
+  if (llmPending) runSheetLlmEnrich(book, idx, gen);
+  patchSheetWishlistButton();
+  updateBookSheetBackButton();
+}
 
 const WISHLIST_STORAGE_KEY = 'bl_wishlist_json';
-const WISHLIST_SCHEMA_VERSION = 1;
+/** v2 : entrée `book` = instantané complet pour rouvrir la fiche. */
+const WISHLIST_SCHEMA_VERSION = 2;
 /** Entrées persistantes (jamais d’index de session seul). */
 let wishlistItems = [];
 
@@ -364,7 +436,7 @@ function captureBase64() {
 }
 
 /** Durée d’un cycle de pixellisation (alignée sur `--scan-sweep-duration` en CSS). */
-const SCAN_PIXEL_MS = 4800;
+const SCAN_PIXEL_MS = 6800;
 
 let scanPixelRaf = 0;
 let scanPixelLoopStart = 0;
@@ -425,10 +497,12 @@ function scanPixelTick(now) {
   }
   const elapsed = now - scanPixelLoopStart;
   const p = (elapsed % SCAN_PIXEL_MS) / SCAN_PIXEL_MS;
-  /* Cosinus : montée douce au début et à la fin du cycle (plus ciné que p³). */
+  /* Cosinus : ease global sur le cycle. */
   const t = (1 - Math.cos(Math.PI * p)) / 2;
-  const maxB = fastMode ? 28 : 40;
-  const block = 1 + t * (maxB - 1);
+  /* Puissance > 1 : longtemps quasi net, puis montée plus rapide vers le max (moins brutal qu’avant). */
+  const tBlock = Math.pow(t, 2.45);
+  const maxB = fastMode ? 17 : 23;
+  const block = 1 + tBlock * (maxB - 1);
   drawPixelatedOnto(canvas, scanPixelLayer, block);
   scanPixelRaf = requestAnimationFrame(scanPixelTick);
 }
@@ -481,7 +555,8 @@ const SYSTEM_SHEET_DETAIL = `Tu es critique littéraire professionnel et conseil
 Tu réponds exclusivement par UN objet JSON UTF-8 valide. Aucun markdown, aucun texte hors du JSON.
 La clé "critique" doit être une vraie critique argumentée : cadrage du livre, mérites littéraires ou narratifs, limites éventuelles, public visé — sans spoiler majeur ni formules publicitaires creuses.
 Si tu ne connais pas le livre, utilise null, [] ou chaînes vides là où c'est indiqué et une courte critique explicitant l'incertitude et ce qu'il faudrait vérifier avant achat.
-Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention). Chaque suggestion doit avoir une année de première parution ("annee", 4 chiffres) connue avec certitude : elle sert à répartir les titres par décennie. Fournis aussi "style" (genre ou registre court en français, ex. « polar psychologique », ou null). Le champ "accroche" doit donner une idée concrète de l'intrigue (situation initiale, protagoniste, conflit ou mystère posé), pas un rappel de genre ni une phrase sur le ton ou la qualité du suspense : le genre va dans "style".`;
+Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention). Chaque suggestion doit avoir une année de première parution ("annee", 4 chiffres) connue avec certitude : elle sert à répartir les titres par décennie. Fournis aussi "style" (genre ou registre court en français, ex. « polar psychologique », ou null). Le champ "accroche" doit donner une idée concrète de l'intrigue (situation initiale, protagoniste, conflit ou mystère posé), pas un rappel de genre ni une phrase sur le ton ou la qualité du suspense : le genre va dans "style".
+Pour "auteur_wikipedia" : n'invente pas d'URL. Soit null (auteur inconnu ou trop d'homonymes), soit un objet avec l'URL desktop exacte d'un article encyclopédique sur la personne physique auteur·rice principale·al de CE titre (pas un film, lieu, œuvre, page d'homonymes, m.mobile). Domaines autorisés : uniquement https://LL.wikipedia.org/wiki/... où LL est le code langue (fr ou en de préférence).`;
 
 const MAX_TOKENS_SHEET_DETAIL = 4096;
 
@@ -759,6 +834,7 @@ Réponds par un objet JSON avec exactement ces clés :
 - "pitch" : string, une phrase accroche sans spoiler, ou null
 - "recompenses" : string, prix ou distinctions pour CE titre, ou null
 - "place_dans_loeuvre" : string, une phrase sur ce roman dans la bibliographie de l'auteur (chef-d'œuvre, entrée, pivot…), ou null
+- "auteur_wikipedia" : null ou objet {"url": string, "titre_article": string|null, "lang": "fr"|"en"|null} — URL desktop de l'article biographique Wikipédia de l'auteur principal de CE livre (même personne que pour le titre et l'auteur ci-dessus ; pas film, lieu, homonyme, page d'œuvre). "url" = https://fr.wikipedia.org/wiki/... ou https://en.wikipedia.org/wiki/... uniquement, sans paramètres de requête. "titre_article" = titre d'article humain (optionnel). null si auteur inconnu ou incertitude forte.
 - "critique" : string, critique littéraire professionnelle en français : 8 à 14 phrases réparties en 3 ou 4 paragraphes courts (séparés par deux retours à la ligne \\n\\n). Contenu attendu — sans spoiler majeur ni résumé scène par scène : (1) annonce et cadrage — nature de l'ouvrage, promesse et originalité relative dans son genre ; (2) analyse — style, voix, construction narrative ou développement des idées ; personnages ou tension selon le cas ; (3) bilan — forces principales et réserves argumentées (longueur, facilité, redites…) ; (4) verdict — pour quel lecteur, avec quel niveau d'attente ; préciser si le titre tient la promesse éditoriale. Interdit : langage publicitaire, superlatifs gratuits, « coup de cœur », mystère fake. Si les infos sont insuffisantes, le dire clairement et orienter la décision (acheter / attendre / chercher un extrait).
 - "livres_similaires" : tableau d'exactement 10 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number, "style": string|null} — pour « prolonger la lecture » si on a aimé CE livre : œuvres réelles (titres + auteurs exacts), autres auteurs ou titres comparables quand c'est pertinent. Répartition stricte : exactement 2 livres par décennie sur les 5 dernières décennies calendaires, soit les plages ${decadesLecture} — chaque "annee" doit être l'année de première parution (4 chiffres) qui tombe dans l'une de ces plages uniquement ; 2 titres dans chaque plage, ni plus ni moins si tu peux tenir le quota (sinon complète au mieux avec des titres sûrs). Liste dans l'ordre : les deux titres de la décennie la plus récente d'abord, puis les deux de la suivante, et ainsi de suite jusqu'à la cinquième décennie (aligné sur les plages ci-dessus). style = genre ou registre court en français sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) : situation, protagoniste, conflit ou mystère posé, sans spoiler de résolution ; interdit : répéter "style", clichés « polar haute tension », commentaires sur le suspense ou la qualité littéraire ; ne pas inclure le titre analysé ni sa suite directe évidente
 - "si_similaire" : (optionnel) tableau de chaînes "Titre — Auteur" aligné sur les mêmes livres, ou [] si tu as déjà tout mis dans livres_similaires`;
@@ -815,6 +891,10 @@ function mergeSheetDetailIntoBook(book, d) {
     book.si_similaire = lines;
     book.livres_similaires_ia = lines.map(parseSiSimilaireLine).filter(Boolean);
   }
+
+  const awM = mergeAuthorWikiLlmFromDetail(d);
+  if (awM) book._authorWikiLlm = awM;
+  else if (d && typeof d === 'object' && 'auteur_wikipedia' in d) delete book._authorWikiLlm;
 
   book._sheetLlmFetched = true;
 }
@@ -882,7 +962,7 @@ async function fetchCover(title, author) {
   } catch { return null; }
 }
 
-// ── Fiche auteur : sources ouvertes (Open Library, Wikipédia, Google Books) ──
+// ── Fiche auteur : Wikipédia en tête (extrait + lien) ; Open Library en complément (dates, portrait si pas d’image wiki) ──
 function normTitle(t) {
   try {
     return String(t || '')
@@ -946,13 +1026,20 @@ function enrichedBookStableId(book) {
   return `key:${normTitle(title)}::${normTitle(primaryAuthor(author))}`;
 }
 
-function wishlistPayloadFromBook(book) {
+function wishlistPayloadFromBook(book, opts = {}) {
+  const omitBook = !!opts.omitBook;
   const title = book.info?.title || book.title || '';
   const author = book.info?.authors?.join(', ') || book.author || '';
   const id = enrichedBookStableId(book);
   const thumb = book.info?.imageLinks?.thumbnail?.replace('http:', 'https:')
     || book.info?.imageLinks?.smallThumbnail?.replace('http:', 'https:') || null;
   const isbn = pickPrimaryIsbn(book.info) || '';
+  let bookSnap = null;
+  if (!omitBook) {
+    try {
+      bookSnap = cloneBookForSheetHistory(book);
+    } catch { /* entrée sans book */ }
+  }
   return {
     id,
     title: (title || 'Sans titre').slice(0, 500),
@@ -961,6 +1048,7 @@ function wishlistPayloadFromBook(book) {
     genre: typeof book.genre === 'string' ? book.genre.slice(0, 120) : null,
     thumbUrl: thumb ? thumb.slice(0, 2000) : null,
     addedAt: Date.now(),
+    book: bookSnap,
   };
 }
 
@@ -973,14 +1061,24 @@ function parseWishlistItemsArray(arr) {
   if (!Array.isArray(arr)) return out;
   for (const it of arr) {
     if (!it || typeof it !== 'object' || typeof it.id !== 'string' || !it.id) continue;
+    const book = it.book && typeof it.book === 'object' ? it.book : null;
+    let title = String(it.title || 'Sans titre').slice(0, 500);
+    let author = String(it.author || '').slice(0, 300);
+    if (book) {
+      const t2 = book.info?.title || book.title || '';
+      const a2 = book.info?.authors?.join(', ') || book.author || '';
+      if (t2) title = String(t2).slice(0, 500);
+      if (a2) author = String(a2).slice(0, 300);
+    }
     out.push({
       id: it.id,
-      title: String(it.title || 'Sans titre').slice(0, 500),
-      author: String(it.author || '').slice(0, 300),
+      title,
+      author,
       isbn: String(it.isbn || '').slice(0, 24),
       genre: typeof it.genre === 'string' ? it.genre.slice(0, 120) : null,
       thumbUrl: typeof it.thumbUrl === 'string' ? it.thumbUrl.slice(0, 2000) : null,
       addedAt: Number.isFinite(it.addedAt) ? it.addedAt : Date.now(),
+      book,
     });
   }
   return out;
@@ -1022,15 +1120,34 @@ function wishlistPersist() {
   }
 }
 
+function wishlistSnapshotItems() {
+  return wishlistItems.map(x => ({
+    ...x,
+    book: x.book ? cloneBookForSheetHistory(x.book) : null,
+  }));
+}
+
+function wishlistRestoreSnapshot(snapshot) {
+  wishlistItems = snapshot.map(x => ({
+    ...x,
+    book: x.book ? cloneBookForSheetHistory(x.book) : null,
+  }));
+}
+
 function wishlistToggleFromBook(book) {
   const next = wishlistPayloadFromBook(book);
   const pos = wishlistItems.findIndex(x => x.id === next.id);
-  const snapshot = wishlistItems.map(x => ({ ...x }));
+  const snapshot = wishlistSnapshotItems();
   if (pos >= 0) wishlistItems.splice(pos, 1);
   else wishlistItems.unshift(next);
-  const r = wishlistPersist();
+  let r = wishlistPersist();
+  if (!r.ok && r.quota && pos < 0 && next.book) {
+    wishlistRestoreSnapshot(snapshot);
+    wishlistItems.unshift(wishlistPayloadFromBook(book, { omitBook: true }));
+    r = wishlistPersist();
+  }
   if (!r.ok) {
-    wishlistItems = snapshot;
+    wishlistRestoreSnapshot(snapshot);
     return { ok: false, quota: r.quota };
   }
   return { ok: true, added: pos < 0 };
@@ -1099,7 +1216,7 @@ function renderWishlistPanelBody() {
     const img = it.thumbUrl
       ? `<div class="wishlist-row-thumb"><img src="${esc(it.thumbUrl)}" alt="" loading="lazy"></div>`
       : '<div class="wishlist-row-thumb wishlist-row-thumb--ph" aria-hidden="true"></div>';
-    return `<article class="wishlist-row">
+    return `<article class="wishlist-row wishlist-row--clickable" role="button" tabindex="0" data-wishlist-open="${safeId}" aria-label="Ouvrir la fiche : ${t}">
       ${img}
       <div class="wishlist-row-text">
         <div class="wishlist-row-title">${t}</div>
@@ -1184,24 +1301,112 @@ function truncateBlurb(text, max = 480) {
   return `${sp > max * 0.65 ? cut.slice(0, sp) : cut}…`;
 }
 
-async function fetchWikiAuthorSummary(name) {
-  const tryLang = async lang => {
-    const safe = encodeURIComponent(name.trim().replace(/\s+/g, '_'));
-    try {
-      const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${safe}`);
-      if (!r.ok) return null;
-      const d = await r.json();
-      if (d.type === 'disambiguation' || !d.extract) return null;
-      return {
-        extract: d.extract,
-        title: d.title,
-        url: d.content_urls?.desktop?.page,
-        lang,
-      };
-    } catch {
-      return null;
-    }
+/** Premier titre d’article issu de la recherche wiki (page réelle, pas homonymie vide). */
+async function wikiOpensearchFirstTitle(query, lang) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+  try {
+    const u = new URL(`https://${lang}.wikipedia.org/w/api.php`);
+    u.searchParams.set('action', 'opensearch');
+    u.searchParams.set('search', q);
+    u.searchParams.set('limit', '6');
+    u.searchParams.set('namespace', '0');
+    u.searchParams.set('format', 'json');
+    u.searchParams.set('origin', '*');
+    const r = await fetch(u.toString());
+    if (!r.ok) return null;
+    const data = await r.json();
+    const titles = Array.isArray(data?.[1]) ? data[1] : [];
+    const first = titles.find(t => String(t).trim());
+    return first ? String(first).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchWikiSummaryForTitle(title, lang) {
+  const t = String(title || '').trim();
+  if (!t) return null;
+  const safe = encodeURIComponent(t.replace(/\s+/g, '_'));
+  try {
+    const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${safe}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d.type === 'disambiguation' || !d.extract) return null;
+    const thumb = d.thumbnail?.source ? String(d.thumbnail.source).replace(/^http:/, 'https:') : '';
+    return {
+      extract: d.extract,
+      title: d.title,
+      url: d.content_urls?.desktop?.page,
+      lang,
+      thumbUrl: thumb || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Extrait { lang, title } d'une URL article desktop *.wikipedia.org/wiki/… (hors espaces de noms spéciaux). */
+function parseWikipediaArticleUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s, 'https://fr.wikipedia.org');
+    const host = u.hostname.replace(/^www\./i, '');
+    const m = host.match(/^([a-z]{2,12})\.wikipedia\.org$/i);
+    if (!m) return null;
+    const lang = m[1].toLowerCase();
+    const path = u.pathname || '';
+    if (!path.startsWith('/wiki/')) return null;
+    let enc = path.slice('/wiki/'.length).split('/')[0];
+    if (!enc) return null;
+    const decodedSeg = decodeURIComponent(enc);
+    if (/^special:/i.test(decodedSeg)) return null;
+    const title = decodedSeg.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!title) return null;
+    return { lang, title };
+  } catch {
+    return null;
+  }
+}
+
+/** Valide et normalise la suggestion Wikipédia auteur renvoyée par l'IA (JSON fiche). */
+function mergeAuthorWikiLlmFromDetail(d) {
+  const aw = d?.auteur_wikipedia;
+  if (aw == null) return null;
+  let url = '';
+  let titre_article = '';
+  if (typeof aw === 'object' && aw) {
+    url = String(aw.url || '').trim();
+    titre_article = String(aw.titre_article || aw.title || '').trim();
+  } else if (typeof aw === 'string') {
+    url = aw.trim();
+  }
+  if (!url) return null;
+  const base = url.split('#')[0].split('?')[0];
+  const parsed = parseWikipediaArticleUrl(base);
+  if (!parsed) return null;
+  return {
+    url: base,
+    titre_article: titre_article || parsed.title,
+    lang: parsed.lang,
   };
+}
+
+/** Résumé + lien Wikipédia (FR puis EN), avec recherche opensearch si le titre littéral ne matche pas. */
+async function fetchWikiAuthorSummary(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+
+  const tryLang = async lang => {
+    let w = await fetchWikiSummaryForTitle(raw, lang);
+    if (w) return w;
+    const alt = await wikiOpensearchFirstTitle(raw, lang);
+    if (!alt || alt === raw) return null;
+    w = await fetchWikiSummaryForTitle(alt, lang);
+    return w || null;
+  };
+
   return (await tryLang('fr')) || (await tryLang('en'));
 }
 
@@ -1222,7 +1427,7 @@ async function fetchOlAuthorDetail(authorKey) {
   }
 }
 
-function renderAuthorSectionHtml(wiki, olDetail, pickedDoc, authorName) {
+function renderAuthorSectionHtml(wiki, olDetail, _pickedDoc, authorName) {
   let bio = wiki?.extract ? String(wiki.extract).trim() : '';
   const olBio = normalizeOlBio(olDetail?.bio);
   if (olBio.length > bio.length) bio = olBio;
@@ -1233,33 +1438,49 @@ function renderAuthorSectionHtml(wiki, olDetail, pickedDoc, authorName) {
   const dateStr = dates.join(' · ');
 
   const photoId = olDetail?.photos?.[0];
-  const photoUrl = photoId ? `https://covers.openlibrary.org/a/id/${photoId}-M.jpg` : '';
+  const olPhotoUrl = photoId ? `https://covers.openlibrary.org/a/id/${photoId}-M.jpg` : '';
+  const wikiPhoto = (wiki?.thumbUrl && String(wiki.thumbUrl).trim()) || '';
+  const photoUrl = wikiPhoto || olPhotoUrl;
 
-  const olCount = pickedDoc?.work_count != null
-    ? `${pickedDoc.work_count} œuvre(s) référencées (Open Library)`
+  const wikiIaHint = wiki?.fromLlm
+    ? '<span class="sheet-author-wiki-ia" title="Article proposé lors de l\'approfondissement IA"> (IA)</span>'
+    : '';
+  const wikiArticleLink = wiki?.url
+    ? `<p class="sheet-author-wiki sheet-author-wiki--primary"><a class="card-link" href="${esc(wiki.url)}" target="_blank" rel="noopener">Wikipédia — <span class="sheet-author-wiki-title">${esc(wiki.title || authorName)}</span> <span class="sheet-author-wiki-lang">(${wiki.lang?.toUpperCase() || '?'})</span>${wikiIaHint} ↗</a></p>`
     : '';
 
-  if (!bio && !dateStr && !photoUrl && !olCount) {
+  const wikiSearchLink = !wiki?.url && authorName
+    ? `<p class="sheet-author-wiki sheet-author-wiki--primary"><a class="card-link" href="https://fr.wikipedia.org/w/index.php?search=${encodeURIComponent(authorName)}" target="_blank" rel="noopener">Rechercher <strong>${esc(authorName)}</strong> sur Wikipédia ↗</a></p>`
+    : '';
+
+  const hasPortrait = Boolean(photoUrl);
+  const hasDates = Boolean(dateStr);
+  const hasBio = Boolean(bio);
+  const hasWikiArticle = Boolean(wiki?.url);
+  if (!hasWikiArticle && !wikiSearchLink && !hasPortrait && !hasDates && !hasBio) {
     return `
       <p class="sheet-author-empty">
-        Pas de biographie trouvée dans les bases ouvertes pour <strong>${esc(authorName)}</strong>.
-        Vérifiez l’orthographe du nom ou ouvrez Wikipédia / SensCritique depuis les boutons ci-dessus.
+        Pas d’entrée trouvée pour <strong>${esc(authorName)}</strong>.
+        Essayez une recherche sur <a class="card-link" href="https://fr.wikipedia.org/w/index.php?search=${encodeURIComponent(authorName)}" target="_blank" rel="noopener">Wikipédia ↗</a> ou vérifiez l’orthographe du nom.
       </p>`;
   }
 
-  const wikiPara = wiki?.url
-    ? `<p class="sheet-author-wiki"><a class="card-link" href="${esc(wiki.url)}" target="_blank" rel="noopener">Wikipédia (${wiki.lang?.toUpperCase() || '?'}) ↗</a></p>`
+  const bioHint = !hasBio
+    ? (hasWikiArticle
+        ? '<p class="sheet-author-empty sheet-author-empty--inline">Pas d’extrait sur cette fiche — le lien mène à l’article Wikipédia complet.</p>'
+        : (wikiSearchLink
+            ? '<p class="sheet-author-empty sheet-author-empty--inline">Aucun article reconnu automatiquement — la recherche Wikipédia ci-dessus peut aider.</p>'
+            : ''))
     : '';
 
   return `
     <div class="sheet-author-card">
+      ${wikiArticleLink || wikiSearchLink}
       ${photoUrl ? `<img class="sheet-author-photo" src="${esc(photoUrl)}" alt="" loading="lazy">` : ''}
       ${dateStr ? `<div class="sheet-author-dates">${esc(dateStr)}</div>` : ''}
-      ${olCount ? `<div class="sheet-author-dates">${esc(olCount)}</div>` : ''}
-      ${bio ? `<div class="sheet-author-bio"><p>${esc(bio)}</p></div>` : ''}
-      ${!bio ? '<p class="sheet-author-empty">Biographie courte indisponible — dates ou portrait peuvent suffire pour identifier l’auteur.</p>' : ''}
-    </div>
-    ${wikiPara}`;
+      ${hasBio ? `<div class="sheet-author-bio"><p>${esc(bio)}</p></div>` : ''}
+      ${bioHint}
+    </div>`;
 }
 
 function sheetAuthorSkeleton() {
@@ -1284,12 +1505,36 @@ async function hydrateSheetAuthorZones(book, authorName, gen) {
   mount.innerHTML = sheetAuthorSkeleton();
 
   try {
-    const [wiki, olSearch] = await Promise.all([
+    const [wikiHeur, olSearch] = await Promise.all([
       fetchWikiAuthorSummary(authorName),
       fetch(`https://openlibrary.org/search/authors.json?q=${encodeURIComponent(authorName)}&limit=8`).then(r => r.json()).catch(() => ({ docs: [] })),
     ]);
 
     if (gen !== bookSheetLoadGen) return;
+
+    let wiki = wikiHeur;
+    const llmMeta = book._authorWikiLlm;
+    const llmUrl = llmMeta && typeof llmMeta.url === 'string' ? llmMeta.url.trim() : '';
+    if (llmUrl) {
+      const pUrl = parseWikipediaArticleUrl(llmUrl);
+      if (pUrl) {
+        const wLlm = await fetchWikiSummaryForTitle(pUrl.title, pUrl.lang);
+        if (wLlm?.url) {
+          wiki = { ...wLlm, fromLlm: true };
+        } else {
+          const tit = String(llmMeta.titre_article || pUrl.title || '').trim() || pUrl.title;
+          const base = llmUrl.split('#')[0].split('?')[0];
+          wiki = {
+            extract: wikiHeur?.extract || '',
+            title: tit,
+            url: base,
+            lang: pUrl.lang,
+            thumbUrl: wikiHeur?.thumbUrl || '',
+            fromLlm: true,
+          };
+        }
+      }
+    }
 
     const docs = olSearch.docs || [];
     const picked = pickOlAuthorDoc(docs, authorName);
@@ -1541,6 +1786,11 @@ function applySheetLlmDomPatch(book, gen) {
   const c = $('sheet-critique-host');
   if (c) c.outerHTML = buildSheetCritiqueSection(book, false);
   patchSheetWishlistButton();
+  const curBook = getSheetBook();
+  if (curBook && curBook._authorWikiLlm?.url) {
+    const ar = primaryAuthor(curBook.info?.authors?.join(', ') || curBook.author || '');
+    void hydrateSheetAuthorZones(curBook, ar, gen);
+  }
 }
 
 function setSheetLlmBar(gen, mode, detail) {
@@ -1694,13 +1944,13 @@ function renderSheetShell(book, gen, opts = {}) {
           <span class="sheet-panel-orb sheet-panel-orb--cool" aria-hidden="true"></span>
           <div class="sheet-panel-head-text">
             <h3 id="sheet-author-heading" class="sheet-panel-title">L’auteur</h3>
-            <p class="sheet-panel-sub">Bio &amp; bibliographie (sources ouvertes).</p>
+            <p class="sheet-panel-sub">Biographie : lien Wikipédia de l'auteur affiné par l'IA après approfondissement (si clé API) ; sinon recherche automatique. Dates et portrait : catalogues ouverts.</p>
           </div>
         </div>
         <div class="sheet-panel-body"><div id="sheet-author-mount">${sheetAuthorSkeleton()}</div></div>
       </section>
 
-      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (photo, Google Books, Open Library, IA) — à croiser.</p>
+      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (Wikipédia, Google Books, catalogues ouverts, IA) — à croiser.</p>
     </div>`;
 
   hydrateSheetAuthorZones(book, primaryAuthor(authorRaw), gen);
@@ -1710,6 +1960,11 @@ async function openBookSheetFromSimilarTitle(title, author) {
   const t = String(title || '').trim();
   const a = String(author || '').trim();
   if (!t) return;
+
+  const sheetOpen = $('book-sheet');
+  if (sheetOpen && !sheetOpen.classList.contains('hidden')) {
+    pushSheetHistoryIfOpen();
+  }
 
   bookSheetLoadGen += 1;
   const gen = bookSheetLoadGen;
@@ -1753,15 +2008,91 @@ async function openBookSheetFromSimilarTitle(title, author) {
   const scrollEl = $('book-sheet-scroll');
   if (scrollEl) scrollEl.scrollTop = 0;
   if (llmPending) runSheetLlmEnrich(book, null, gen);
+  updateBookSheetBackButton();
+}
+
+function openWishlistEntryById(id) {
+  const it = wishlistItems.find(x => x.id === id);
+  if (it) void openBookSheetFromWishlistItem(it);
+}
+
+async function openBookSheetFromWishlistItem(it) {
+  if (!it || typeof it !== 'object' || !it.id) return;
+  const snap =
+    it.book &&
+    typeof it.book === 'object' &&
+    (String(it.book.info?.title || '').trim() || String(it.book.title || '').trim());
+  const titleFallback = String(it.title || '').trim();
+  if (!snap && !titleFallback) return;
+
+  const sheetOpen = $('book-sheet');
+  if (sheetOpen && !sheetOpen.classList.contains('hidden')) {
+    pushSheetHistoryIfOpen();
+  }
+
+  bookSheetLoadGen += 1;
+  const gen = bookSheetLoadGen;
+
+  let book;
+  if (snap) {
+    book = cloneBookForSheetHistory(it.book);
+  } else {
+    const a = String(it.author || '').trim();
+    const info = await fetchCover(titleFallback, primaryAuthor(a) || '');
+    if (gen !== bookSheetLoadGen) return;
+    const resolvedTitle = String(info?.title || titleFallback).trim();
+    let authorsArr = Array.isArray(info?.authors)
+      ? info.authors.map(x => String(x).trim()).filter(Boolean)
+      : [];
+    if (!authorsArr.length && a) {
+      authorsArr = a.split(/[;,]/).map(s => s.trim()).filter(Boolean);
+    }
+    const resolvedAuthor = authorsArr.length ? authorsArr.join(', ') : '';
+
+    const vi = info
+      ? { ...info, title: resolvedTitle || info.title, authors: authorsArr.length ? authorsArr : (info.authors || []) }
+      : { title: resolvedTitle, authors: authorsArr };
+
+    book = {
+      title: resolvedTitle,
+      author: resolvedAuthor,
+      info: vi,
+      genre: 'Livre',
+      confidence: 'medium',
+      critique: '',
+      _sheetLlmFetched: false,
+    };
+  }
+
+  sheetDetachedBook = book;
+  const sheet = $('book-sheet');
+  delete sheet.dataset.sheetBookIdx;
+  sheet.classList.remove('hidden');
+  sheet.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+
+  closeWishlistModal();
+
+  const llmPending = !!(apiKey && !book._sheetLlmFetched);
+  renderSheetShell(book, gen, { llmPending });
+  const scrollEl = $('book-sheet-scroll');
+  if (scrollEl) scrollEl.scrollTop = 0;
+  if (llmPending) runSheetLlmEnrich(book, null, gen);
+  updateBookSheetBackButton();
 }
 
 function openBookSheet(idx) {
   const book = cachedEnrichedBooks[idx];
   if (!book) return;
+  const sheet = $('book-sheet');
+  if (sheet && !sheet.classList.contains('hidden')) {
+    const cur = parseInt(sheet.dataset.sheetBookIdx ?? '', 10);
+    if (!sheetDetachedBook && Number.isFinite(cur) && cur === idx) return;
+    pushSheetHistoryIfOpen();
+  }
   bookSheetLoadGen += 1;
   const gen = bookSheetLoadGen;
   sheetDetachedBook = null;
-  const sheet = $('book-sheet');
   sheet.dataset.sheetBookIdx = String(idx);
   sheet.classList.remove('hidden');
   sheet.setAttribute('aria-hidden', 'false');
@@ -1771,6 +2102,7 @@ function openBookSheet(idx) {
   const scrollEl = $('book-sheet-scroll');
   if (scrollEl) scrollEl.scrollTop = 0;
   if (llmPending) runSheetLlmEnrich(book, idx, gen);
+  updateBookSheetBackButton();
 }
 
 function closeBookSheet() {
@@ -1781,6 +2113,8 @@ function closeBookSheet() {
   document.body.style.overflow = '';
   delete sheet.dataset.sheetBookIdx;
   sheetDetachedBook = null;
+  bookSheetHistoryStack = [];
+  updateBookSheetBackButton();
   const bar = $('sheet-llm-bar');
   if (bar) {
     bar.classList.add('hidden');
@@ -2144,6 +2478,10 @@ document.addEventListener('keydown', e => {
   }
   const sheet = $('book-sheet');
   if (sheet && !sheet.classList.contains('hidden')) {
+    if (bookSheetHistoryStack.length) {
+      popBookSheetHistory();
+      return;
+    }
     closeBookSheet();
     return;
   }
@@ -2490,6 +2828,11 @@ document.addEventListener('paste', e => {
 
 $('book-sheet-backdrop')?.addEventListener('click', closeBookSheet);
 $('book-sheet-close')?.addEventListener('click', closeBookSheet);
+$('book-sheet-back')?.addEventListener('click', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  popBookSheetHistory();
+});
 
 $('book-sheet')?.addEventListener('click', async e => {
   const mini = e.target.closest('[data-more-title]');
@@ -2533,17 +2876,33 @@ wishlistClearAll?.addEventListener('click', () => {
 
 wishlistBody?.addEventListener('click', e => {
   const rm = e.target.closest('[data-wishlist-remove]');
-  if (!rm) return;
-  const id = decodeURIComponent(rm.getAttribute('data-wishlist-remove') || '');
-  if (!id) return;
-  wishlistItems = wishlistItems.filter(x => x.id !== id);
-  const r = wishlistPersist();
-  if (!r.ok) {
-    wishlistReloadFromDisk();
-    setHint('Impossible de mettre à jour le stockage local.');
+  if (rm) {
+    const id = decodeURIComponent(rm.getAttribute('data-wishlist-remove') || '');
+    if (!id) return;
+    wishlistItems = wishlistItems.filter(x => x.id !== id);
+    const r = wishlistPersist();
+    if (!r.ok) {
+      wishlistReloadFromDisk();
+      setHint('Impossible de mettre à jour le stockage local.');
+      return;
+    }
+    refreshWishlistDependentUi();
     return;
   }
-  refreshWishlistDependentUi();
+  const row = e.target.closest('[data-wishlist-open]');
+  if (!row) return;
+  const openId = decodeURIComponent(row.getAttribute('data-wishlist-open') || '');
+  if (!openId) return;
+  openWishlistEntryById(openId);
+});
+
+wishlistBody?.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const row = e.target.closest('[data-wishlist-open]');
+  if (!row || e.target.closest('[data-wishlist-remove]')) return;
+  e.preventDefault();
+  const openId = decodeURIComponent(row.getAttribute('data-wishlist-open') || '');
+  if (openId) openWishlistEntryById(openId);
 });
 
 window.addEventListener('storage', e => {

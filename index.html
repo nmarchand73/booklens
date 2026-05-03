@@ -11,6 +11,7 @@
   <link rel="dns-prefetch" href="https://www.googleapis.com">
   <link rel="dns-prefetch" href="https://openlibrary.org">
   <link rel="dns-prefetch" href="https://fr.wikipedia.org">
+  <link rel="dns-prefetch" href="https://en.wikipedia.org">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <title>BookLens</title>
@@ -175,7 +176,11 @@
   <div class="book-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-book-title">
     <div class="book-sheet-drag-hint" aria-hidden="true"><span class="sheet-handle sheet-handle--detail"></span></div>
     <header class="book-sheet-toolbar">
-      <div class="book-sheet-toolbar-lead">
+      <div class="book-sheet-toolbar-start">
+        <button type="button" id="book-sheet-back" class="book-sheet-back hidden" aria-hidden="true" aria-label="Fiche précédente">
+          <span class="book-sheet-back-icon" aria-hidden="true">←</span>
+        </button>
+        <div class="book-sheet-toolbar-lead">
         <span class="book-sheet-toolbar-mark" aria-hidden="true">
           <svg class="book-sheet-toolbar-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
@@ -183,6 +188,7 @@
           </svg>
         </span>
         <span class="book-sheet-toolbar-label">Fiche livre</span>
+        </div>
       </div>
       <button type="button" id="book-sheet-close" class="book-sheet-close" aria-label="Fermer la fiche">
         <span class="book-sheet-close-icon" aria-hidden="true">✕</span>
