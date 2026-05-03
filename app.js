@@ -1933,9 +1933,9 @@ function renderSheetShell(book, gen, opts = {}) {
 
       ${llmBarHtml}
 
-      ${critiqueSectionHtml}
-
       ${readerSectionHtml}
+
+      ${critiqueSectionHtml}
 
       ${blurbSection}
 
