@@ -23,7 +23,7 @@ let lastEnrichedForAr = [];
 let cachedEnrichedBooks = [];
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
-/** Fiche ouverte depuis « Poursuivre la lecture » (hors liste de scan). */
+/** Fiche ouverte depuis une suggestion (hors liste de scan). */
 let sheetDetachedBook = null;
 
 const WISHLIST_STORAGE_KEY = 'bl_wishlist_json';
@@ -33,6 +33,7 @@ let wishlistItems = [];
 
 const $ = id => document.getElementById(id);
 const canvas       = $('canvas');
+const scanPixelLayer = $('scan-pixel-layer');
 const previewEl    = $('preview');
 const previewBack  = $('preview-back');
 const viewportEmpty = $('viewport-empty');
@@ -247,10 +248,22 @@ function initSplitPaneResize() {
 function syncMainControlLabel() {
   const has = !!uploadedImg;
   if (mainCaptionEl) mainCaptionEl.textContent = has ? 'Envoyer' : 'Photo';
+  if (!scanBtn) return;
   scanBtn.title = has
     ? 'Envoyer cette image à l’analyse'
     : 'Prendre une photo avec l’appareil (pas la photothèque)';
   scanBtn.setAttribute('aria-label', has ? 'Envoyer l’image à l’analyse' : 'Ouvrir l’appareil photo pour prendre une photo');
+  const icoCam = scanBtn.querySelector('.main-ico--camera');
+  const icoSend = scanBtn.querySelector('.main-ico--send');
+  if (icoCam && icoSend) {
+    if (has) {
+      icoCam.classList.add('hidden');
+      icoSend.classList.remove('hidden');
+    } else {
+      icoCam.classList.remove('hidden');
+      icoSend.classList.add('hidden');
+    }
+  }
 }
 
 (() => {
@@ -279,6 +292,95 @@ function captureBase64() {
   canvas.getContext('2d').drawImage(src, 0, 0, w, h);
   lastCaptureSize = { w, h };
   return canvas.toDataURL('image/jpeg', jpegQ).split(',')[1];
+}
+
+/** Durée d’un cycle de pixellisation (alignée sur `--scan-sweep-duration` en CSS). */
+const SCAN_PIXEL_MS = 4800;
+
+let scanPixelRaf = 0;
+let scanPixelLoopStart = 0;
+/** Tampon downscale → upscale (effet blocs). */
+let __scanPixelBuf = null;
+
+function cancelScanPixelAnim() {
+  if (scanPixelRaf) {
+    cancelAnimationFrame(scanPixelRaf);
+    scanPixelRaf = 0;
+  }
+}
+
+/** Masque la couche pixellisée utilisée pendant l’effet scan. */
+function clearScanPixelLayer() {
+  cancelScanPixelAnim();
+  if (!scanPixelLayer) return;
+  scanPixelLayer.classList.add('hidden');
+  scanPixelLayer.setAttribute('aria-hidden', 'true');
+  const c = scanPixelLayer.getContext('2d');
+  if (c && scanPixelLayer.width > 0 && scanPixelLayer.height > 0) {
+    c.clearRect(0, 0, scanPixelLayer.width, scanPixelLayer.height);
+  }
+}
+
+/**
+ * Dessine `srcCanvas` sur `destCanvas` avec taille de bloc `block` (1 = net, plus grand = plus pixelisé).
+ */
+function drawPixelatedOnto(srcCanvas, destCanvas, block) {
+  const sw = srcCanvas.width;
+  const sh = srcCanvas.height;
+  const dw = destCanvas.width;
+  const dh = destCanvas.height;
+  const b = Math.max(1, Math.min(Math.floor(block), Math.max(sw, sh)));
+  const cw = Math.max(1, Math.ceil(sw / b));
+  const ch = Math.max(1, Math.ceil(sh / b));
+  if (!__scanPixelBuf) __scanPixelBuf = document.createElement('canvas');
+  __scanPixelBuf.width = cw;
+  __scanPixelBuf.height = ch;
+  const sctx = __scanPixelBuf.getContext('2d');
+  sctx.imageSmoothingEnabled = false;
+  sctx.clearRect(0, 0, cw, ch);
+  sctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, cw, ch);
+  const dctx = destCanvas.getContext('2d');
+  dctx.imageSmoothingEnabled = false;
+  dctx.clearRect(0, 0, dw, dh);
+  dctx.drawImage(__scanPixelBuf, 0, 0, cw, ch, 0, 0, dw, dh);
+}
+
+function scanPixelTick(now) {
+  if (!scanPixelLayer || scanPixelLayer.classList.contains('hidden')) {
+    scanPixelRaf = 0;
+    return;
+  }
+  if (!canvas?.width || !canvas?.height) {
+    scanPixelRaf = 0;
+    return;
+  }
+  const elapsed = now - scanPixelLoopStart;
+  const p = (elapsed % SCAN_PIXEL_MS) / SCAN_PIXEL_MS;
+  /* Cosinus : montée douce au début et à la fin du cycle (plus ciné que p³). */
+  const t = (1 - Math.cos(Math.PI * p)) / 2;
+  const maxB = fastMode ? 28 : 40;
+  const block = 1 + t * (maxB - 1);
+  drawPixelatedOnto(canvas, scanPixelLayer, block);
+  scanPixelRaf = requestAnimationFrame(scanPixelTick);
+}
+
+/** Affiche #scan-pixel-layer et anime la pixellisation à partir du canvas de capture. */
+function refreshScanPixelLayer() {
+  if (!scanPixelLayer || !canvas?.width || !canvas?.height) return;
+  if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    clearScanPixelLayer();
+    return;
+  }
+  const w0 = canvas.width;
+  const h0 = canvas.height;
+  if (w0 < 2 || h0 < 2) return;
+  scanPixelLayer.width = w0;
+  scanPixelLayer.height = h0;
+  scanPixelLayer.classList.remove('hidden');
+  scanPixelLayer.setAttribute('aria-hidden', 'false');
+  cancelScanPixelAnim();
+  scanPixelLoopStart = performance.now();
+  scanPixelRaf = requestAnimationFrame(scanPixelTick);
 }
 
 // ── Claude vision + critique ──────────────────────────────────────────────────
@@ -310,7 +412,7 @@ const SYSTEM_SHEET_DETAIL = `Tu es critique littéraire professionnel et conseil
 Tu réponds exclusivement par UN objet JSON UTF-8 valide. Aucun markdown, aucun texte hors du JSON.
 La clé "critique" doit être une vraie critique argumentée : cadrage du livre, mérites littéraires ou narratifs, limites éventuelles, public visé — sans spoiler majeur ni formules publicitaires creuses.
 Si tu ne connais pas le livre, utilise null, [] ou chaînes vides là où c'est indiqué et une courte critique explicitant l'incertitude et ce qu'il faudrait vérifier avant achat.
-Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention). Pour chaque suggestion, fournis aussi "annee" (année de première parution en 4 chiffres, ou null si incertain) et "style" (genre ou registre court en français, ex. « polar psychologique », ou null). Le champ "accroche" doit donner une idée concrète de l'intrigue (situation initiale, protagoniste, conflit ou mystère posé), pas un rappel de genre ni une phrase sur le ton ou la qualité du suspense : le genre va dans "style".`;
+Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention). Chaque suggestion doit avoir une année de première parution ("annee", 4 chiffres) connue avec certitude : elle sert à répartir les titres par décennie. Fournis aussi "style" (genre ou registre court en français, ex. « polar psychologique », ou null). Le champ "accroche" doit donner une idée concrète de l'intrigue (situation initiale, protagoniste, conflit ou mystère posé), pas un rappel de genre ni une phrase sur le ton ou la qualité du suspense : le genre va dans "style".`;
 
 const MAX_TOKENS_SHEET_DETAIL = 4096;
 
@@ -424,11 +526,103 @@ function normalizeYearField(raw) {
   return s.length <= 12 ? s : s.slice(0, 10);
 }
 
+/** Année numérique exploitable pour le filtre par décennie (null si absent ou hors plage). */
+function parsePublicationYear(raw) {
+  const s = normalizeYearField(raw);
+  if (!s) return null;
+  const y = parseInt(s, 10);
+  if (!Number.isFinite(y) || y < 1000 || y > 2099) return null;
+  return y;
+}
+
+/** Les 5 dernières décennies calendaires (ex. en 2026 → 2020, 2010, 2000, 1990, 1980). */
+function lastFiveDecadeStarts(refYear = new Date().getFullYear()) {
+  const y = Number.isFinite(refYear) ? refYear : new Date().getFullYear();
+  const currentDecade = Math.floor(y / 10) * 10;
+  return Array.from({ length: 5 }, (_, i) => currentDecade - i * 10);
+}
+
+/** Libellés FR pour le prompt (ex. « 2020–2029 »). */
+function describeLastFiveDecadesForPrompt(refYear = new Date().getFullYear()) {
+  return lastFiveDecadeStarts(refYear).map(d => `${d}–${d + 9}`).join(' ; ');
+}
+
+/**
+ * Garde au plus 2 titres par décennie parmi les 5 dernières décennies (parution dans la plage).
+ * Ordre : décennies décroissantes ; dans chaque décennie, parutions les plus récentes d'abord.
+ */
+function capLivresSimilairesParDecennies(rows, refYear = new Date().getFullYear()) {
+  const decades = lastFiveDecadeStarts(refYear);
+  const allowed = new Set(decades);
+  const byDecade = new Map(decades.map(d => [d, []]));
+  for (const row of rows) {
+    const y = parsePublicationYear(row.annee);
+    if (y == null) continue;
+    const d0 = Math.floor(y / 10) * 10;
+    if (!allowed.has(d0)) continue;
+    byDecade.get(d0).push({ row, y });
+  }
+  const out = [];
+  for (const d of decades) {
+    const bucket = byDecade.get(d) || [];
+    bucket.sort((a, b) => b.y - a.y);
+    for (const { row } of bucket.slice(0, 2)) out.push(row);
+  }
+  return out;
+}
+
+/** Libellé d'une décennie (ex. 2023 → « 2020–2029 »). */
+function decadeRangeLabel(year) {
+  const y = typeof year === 'number' ? year : parsePublicationYear(year);
+  if (y == null) return null;
+  const d0 = Math.floor(y / 10) * 10;
+  return `${d0}–${d0 + 9}`;
+}
+
+/** Trie les suggestions : décennie décroissante, puis année décroissante ; sans année à la fin. */
+function sortReaderSimilarPicksDecadeDesc(picks) {
+  return [...picks].sort((a, b) => {
+    const ya = parsePublicationYear(a.year);
+    const yb = parsePublicationYear(b.year);
+    if (ya != null && yb != null) {
+      const da = Math.floor(ya / 10) * 10;
+      const db = Math.floor(yb / 10) * 10;
+      if (da !== db) return db - da;
+      return yb - ya;
+    }
+    if (ya != null) return -1;
+    if (yb != null) return 1;
+    return 0;
+  });
+}
+
+/**
+ * Regroupe les picks par libellé de décennie (décroissant), après tri global.
+ * Les entrées sans année valide sont regroupées en un seul bloc sans titre de décennie.
+ */
+function groupSimilarPicksByDecadeDesc(picks) {
+  const sorted = sortReaderSimilarPicksDecadeDesc(picks);
+  const groups = [];
+  for (const p of sorted) {
+    const label = decadeRangeLabel(p.year);
+    const last = groups[groups.length - 1];
+    if (label != null && last && last.label === label) {
+      last.items.push(p);
+    } else if (label == null && last && last.label === null) {
+      last.items.push(p);
+    } else {
+      groups.push({ label, items: [p] });
+    }
+  }
+  return groups;
+}
+
 /** Titres pour « Pour prolonger la lecture » (même source que la bande horizontale). */
 function readerSimilarPicksFromBook(book) {
-  const rows = Array.isArray(book.livres_similaires_ia) ? book.livres_similaires_ia : [];
+  const rowsRaw = Array.isArray(book.livres_similaires_ia) ? book.livres_similaires_ia : [];
+  const rows = rowsRaw.length ? capLivresSimilairesParDecennies(rowsRaw) : [];
   if (rows.length) {
-    return rows
+    const picks = rows
       .map(r => ({
         title: String(r.titre ?? '').trim(),
         author: String(r.auteur ?? '').trim(),
@@ -437,6 +631,7 @@ function readerSimilarPicksFromBook(book) {
         meta: String(r.accroche ?? '').trim() || 'Suggestion IA',
       }))
       .filter(p => p.title);
+    return sortReaderSimilarPicksDecadeDesc(picks);
   }
   const raw = Array.isArray(book.si_similaire) ? book.si_similaire : [];
   const out = [];
@@ -456,7 +651,7 @@ function readerSimilarPicksFromBook(book) {
       out.push({ title: s, author: '', year: '', style: '', meta: 'Suggestion IA' });
     }
   }
-  return out;
+  return sortReaderSimilarPicksDecadeDesc(out);
 }
 
 async function fetchSheetDetailFromLlm(book) {
@@ -471,6 +666,7 @@ async function fetchSheetDetailFromLlm(book) {
   const noteGb = vi.averageRating;
   if (noteGb != null) meta.push(`note Google Books ~ ${Number(noteGb).toFixed(1)}`);
   const desc = truncateBlurb(vi.description || '', 900);
+  const decadesLecture = describeLastFiveDecadesForPrompt();
 
   const userMsg = `Enrichis la fiche pour un lecteur exigeant (critique professionnelle + conseil d'achat).
 
@@ -495,7 +691,7 @@ Réponds par un objet JSON avec exactement ces clés :
 - "recompenses" : string, prix ou distinctions pour CE titre, ou null
 - "place_dans_loeuvre" : string, une phrase sur ce roman dans la bibliographie de l'auteur (chef-d'œuvre, entrée, pivot…), ou null
 - "critique" : string, critique littéraire professionnelle en français : 8 à 14 phrases réparties en 3 ou 4 paragraphes courts (séparés par deux retours à la ligne \\n\\n). Contenu attendu — sans spoiler majeur ni résumé scène par scène : (1) annonce et cadrage — nature de l'ouvrage, promesse et originalité relative dans son genre ; (2) analyse — style, voix, construction narrative ou développement des idées ; personnages ou tension selon le cas ; (3) bilan — forces principales et réserves argumentées (longueur, facilité, redites…) ; (4) verdict — pour quel lecteur, avec quel niveau d'attente ; préciser si le titre tient la promesse éditoriale. Interdit : langage publicitaire, superlatifs gratuits, « coup de cœur », mystère fake. Si les infos sont insuffisantes, le dire clairement et orienter la décision (acheter / attendre / chercher un extrait).
-- "livres_similaires" : tableau de 5 à 8 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number|null, "style": string|null} — œuvres réelles publiées (titres exacts) pour prolonger la lecture si on a aimé CE livre ; privilégier d'autres auteurs ou titres comparables ; annee = année de première parution (4 chiffres) si connue sinon null ; style = genre ou registre court en français (ex. « polar », « autofiction ») sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) qui donnent une idée nette de l'intrigue : qui fait quoi, quel problème ou mystère est lancé, sans spoiler de résolution ; interdit : répéter ou paraphraser le contenu de "style", formulations du type « thriller où le suspense… », « polar de haute tension », commentaires sur la qualité littéraire ou le ton ; ne pas inclure le titre analysé ni sa suite directe évidente
+- "livres_similaires" : tableau d'exactement 10 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number, "style": string|null} — pour « prolonger la lecture » si on a aimé CE livre : œuvres réelles (titres + auteurs exacts), autres auteurs ou titres comparables quand c'est pertinent. Répartition stricte : exactement 2 livres par décennie sur les 5 dernières décennies calendaires, soit les plages ${decadesLecture} — chaque "annee" doit être l'année de première parution (4 chiffres) qui tombe dans l'une de ces plages uniquement ; 2 titres dans chaque plage, ni plus ni moins si tu peux tenir le quota (sinon complète au mieux avec des titres sûrs). Liste dans l'ordre : les deux titres de la décennie la plus récente d'abord, puis les deux de la suivante, et ainsi de suite jusqu'à la cinquième décennie (aligné sur les plages ci-dessus). style = genre ou registre court en français sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) : situation, protagoniste, conflit ou mystère posé, sans spoiler de résolution ; interdit : répéter "style", clichés « polar haute tension », commentaires sur le suspense ou la qualité littéraire ; ne pas inclure le titre analysé ni sa suite directe évidente
 - "si_similaire" : (optionnel) tableau de chaînes "Titre — Auteur" aligné sur les mêmes livres, ou [] si tu as déjà tout mis dans livres_similaires`;
 
   const text = await claudeNonStreamRequest({
@@ -525,7 +721,7 @@ function mergeSheetDetailIntoBook(book, d) {
   if (typeof d.critique === 'string' && d.critique.trim()) book.critique = d.critique.trim();
 
   if (Array.isArray(d.livres_similaires)) {
-    book.livres_similaires_ia = d.livres_similaires
+    const mapped = d.livres_similaires
       .filter(x => x && typeof x === 'object')
       .map(x => ({
         titre: String(x.titre ?? x.title ?? '').trim(),
@@ -540,8 +736,8 @@ function mergeSheetDetailIntoBook(book, d) {
         annee: normalizeYearField(x.annee ?? x.date ?? x.parution ?? x.year ?? x.publishedDate ?? x.date_parution ?? ''),
         style: String(x.style ?? x.genre ?? x.type ?? '').trim(),
       }))
-      .filter(x => x.titre && x.auteur)
-      .slice(0, 10);
+      .filter(x => x.titre && x.auteur);
+    book.livres_similaires_ia = capLivresSimilairesParDecennies(mapped);
     book.si_similaire = book.livres_similaires_ia.length
       ? book.livres_similaires_ia.map(x => `${x.titre} — ${x.auteur}`)
       : [];
@@ -833,7 +1029,7 @@ function renderWishlistPanelBody() {
     const safeId = encodeURIComponent(it.id);
     const img = it.thumbUrl
       ? `<div class="wishlist-row-thumb"><img src="${esc(it.thumbUrl)}" alt="" loading="lazy"></div>`
-      : '<div class="wishlist-row-thumb wishlist-row-thumb--ph" aria-hidden="true">📖</div>';
+      : '<div class="wishlist-row-thumb wishlist-row-thumb--ph" aria-hidden="true"></div>';
     return `<article class="wishlist-row">
       ${img}
       <div class="wishlist-row-text">
@@ -957,118 +1153,6 @@ async function fetchOlAuthorDetail(authorKey) {
   }
 }
 
-async function fetchOlAuthorWorks(authorKey) {
-  const path = authorKey.startsWith('/') ? authorKey : `/authors/${authorKey}`;
-  try {
-    const r = await fetch(`https://openlibrary.org${path}/works.json?limit=40`);
-    if (!r.ok) return [];
-    const d = await r.json();
-    return d.entries || [];
-  } catch {
-    return [];
-  }
-}
-
-/** Année de parution (YYYY) depuis Google Books ou Open Library */
-function extractPublicationYear(raw) {
-  if (raw == null || raw === '') return '';
-  const s = String(raw).trim();
-  if (!s) return '';
-  const m = s.match(/^(\d{4})/);
-  const y = m ? m[1] : '';
-  if (!y || y === '0000') return '';
-  return y;
-}
-
-/** Meta carte « top auteur » : sortie toujours mentionnée + note GB si dispo */
-function formatAuthorTopBookMeta({ publishedRaw, rating, ratingsCount, sourceNote }) {
-  const year = extractPublicationYear(publishedRaw);
-  const parts = [];
-  parts.push(year ? `Sortie ${year}` : 'Sortie — année inconnue');
-  if (rating != null && rating !== '' && !Number.isNaN(Number(rating))) {
-    parts.push(`★ ${Number(rating).toFixed(1)}${ratingsCount ? ` · ${fmtRatingsCount(ratingsCount)} avis` : ''}`);
-  }
-  if (sourceNote) parts.push(sourceNote);
-  return parts.join(' · ');
-}
-
-async function fetchGoogleBooksByAuthor(authorName, excludeTitle) {
-  if (!authorName?.trim()) return [];
-  const q = encodeURIComponent(`inauthor:"${authorName.trim()}"`);
-  try {
-    const r = await fetch(
-      `${GBOOKS_URL}?q=${q}&maxResults=28&fields=items(volumeInfo(title,authors,imageLinks,averageRating,ratingsCount,publishedDate))`
-    );
-    const d = await r.json();
-    const items = d.items || [];
-    const ex = normTitle(excludeTitle);
-    const filtered = items.filter(it => normTitle(it.volumeInfo?.title) !== ex);
-    filtered.sort((a, b) => {
-      const va = a.volumeInfo || {};
-      const vb = b.volumeInfo || {};
-      const sa = (va.ratingsCount || 0) * (va.averageRating || 0);
-      const sb = (vb.ratingsCount || 0) * (vb.averageRating || 0);
-      return sb - sa;
-    });
-    return filtered.slice(0, 16);
-  } catch {
-    return [];
-  }
-}
-
-function mergeRecommendations(gItems, olEntries, excludeTitle, fallbackAuthor = '') {
-  const ex = normTitle(excludeTitle);
-  const seen = new Set([ex]);
-  const out = [];
-  const olAuthor = String(fallbackAuthor || '').trim();
-
-  for (const it of gItems) {
-    const vi = it.volumeInfo || {};
-    const t = vi.title;
-    if (!t) continue;
-    const nt = normTitle(t);
-    if (seen.has(nt)) continue;
-    seen.add(nt);
-    const authorStr = Array.isArray(vi.authors) ? vi.authors.join(', ') : '';
-    const thumb = vi.imageLinks?.thumbnail?.replace('http:', 'https:')
-      || vi.imageLinks?.smallThumbnail?.replace('http:', 'https:');
-    const meta = formatAuthorTopBookMeta({
-      publishedRaw: vi.publishedDate,
-      rating: vi.averageRating,
-      ratingsCount: vi.ratingsCount,
-      sourceNote: '',
-    });
-    out.push({ title: t, author: authorStr, thumb, meta });
-    if (out.length >= 12) return out;
-  }
-
-  const olSorted = [...olEntries].sort((a, b) => {
-    const ya = parseInt(extractPublicationYear(a.first_publish_date), 10) || 0;
-    const yb = parseInt(extractPublicationYear(b.first_publish_date), 10) || 0;
-    return yb - ya;
-  });
-
-  for (const e of olSorted) {
-    const t = e.title;
-    if (!t) continue;
-    const nt = normTitle(t);
-    if (seen.has(nt)) continue;
-    seen.add(nt);
-    const cid = Array.isArray(e.covers) ? e.covers[0] : null;
-    const thumb = cid ? `https://covers.openlibrary.org/b/id/${cid}-M.jpg` : '';
-    const pubRaw = e.first_publish_date || e.publish_date || '';
-    const meta = formatAuthorTopBookMeta({
-      publishedRaw: pubRaw,
-      rating: null,
-      ratingsCount: null,
-      sourceNote: 'Open Library',
-    });
-    out.push({ title: t, author: olAuthor, thumb, meta });
-    if (out.length >= 12) break;
-  }
-  return out;
-}
-
 function renderAuthorSectionHtml(wiki, olDetail, pickedDoc, authorName) {
   let bio = wiki?.extract ? String(wiki.extract).trim() : '';
   const olBio = normalizeOlBio(olDetail?.bio);
@@ -1109,84 +1193,6 @@ function renderAuthorSectionHtml(wiki, olDetail, pickedDoc, authorName) {
     ${wikiPara}`;
 }
 
-function renderMoreBooksHtml(items) {
-  if (!items.length) {
-    return '<p class="sheet-author-empty">Aucun autre titre mis en avant pour cet auteur dans les sources consultées.</p>';
-  }
-  const slides = items.map(it => {
-    const meta = typeof it.meta === 'string' && it.meta.trim()
-      ? it.meta.trim()
-      : 'Sortie — année inconnue';
-    const author = typeof it.author === 'string' ? it.author : '';
-    const label = `Ouvrir la fiche : ${it.title}`;
-    return `
-    <button type="button" class="sheet-mini-book"
-      data-more-title="${esc(it.title)}"
-      data-more-author="${esc(author)}"
-      aria-label="${esc(label)}">
-      <div class="sheet-mini-title">${esc(it.title)}</div>
-      <div class="sheet-mini-meta">${esc(meta)}</div>
-    </button>`;
-  }).join('');
-  return `<div class="sheet-books-scroll">${slides}</div>`;
-}
-
-function buildIaSimilarCardsForMount(rows, gen) {
-  if (gen !== bookSheetLoadGen) return [];
-  return rows.slice(0, 8).map(row => {
-    const y = normalizeYearField(row.annee ?? row.date ?? row.year ?? row.publishedDate ?? '');
-    const style = String(row.style ?? row.genre ?? '').trim();
-    const bits = [];
-    if (row.auteur) bits.push(row.auteur);
-    if (y) bits.push(y);
-    if (style) bits.push(style);
-    if (row.accroche) bits.push(truncateBlurb(row.accroche, 120));
-    const meta = bits.length ? bits.join(' · ') : 'Suggestion IA';
-    return {
-      title: row.titre,
-      author: String(row.auteur || '').trim(),
-      meta,
-    };
-  });
-}
-
-async function renderSheetMoreBooksCombined(book, gen) {
-  const b2 = $('sheet-more-books-mount');
-  if (!b2 || gen !== bookSheetLoadGen) return;
-
-  const catalog = Array.isArray(book._catalogMoreBooksItems) ? book._catalogMoreBooksItems : [];
-  const iaRows = Array.isArray(book.livres_similaires_ia) ? book.livres_similaires_ia : [];
-  const curNt = normTitle(book.info?.title || book.title || '');
-
-  let iaCards = [];
-  if (iaRows.length) {
-    iaCards = buildIaSimilarCardsForMount(iaRows, gen);
-    if (gen !== bookSheetLoadGen) return;
-  }
-
-  const seen = new Set();
-  const combined = [];
-  const maxTotal = 18;
-
-  /* D’abord le top catalogue auteur (dates de sortie), puis suggestions IA */
-  for (const c of catalog) {
-    if (combined.length >= maxTotal) break;
-    const nt = normTitle(c.title);
-    if (!nt || seen.has(nt) || (curNt && nt === curNt)) continue;
-    seen.add(nt);
-    combined.push(c);
-  }
-  for (const c of iaCards) {
-    if (combined.length >= maxTotal) break;
-    const nt = normTitle(c.title);
-    if (!nt || seen.has(nt) || (curNt && nt === curNt)) continue;
-    seen.add(nt);
-    combined.push(c);
-  }
-
-  b2.innerHTML = renderMoreBooksHtml(combined);
-}
-
 function sheetAuthorSkeleton() {
   return `
     <div class="sheet-skel-block" aria-busy="true">
@@ -1196,39 +1202,22 @@ function sheetAuthorSkeleton() {
     </div>`;
 }
 
-function sheetBooksSkeleton() {
-  return `
-    <div class="sheet-books-scroll" aria-busy="true">
-      ${Array(4).fill(`
-        <div class="sheet-mini-book sheet-mini-book--sk">
-          <div class="sk sheet-skel-line" style="height:12px"></div>
-          <div class="sk sheet-skel-line mid" style="height:9px;margin-top:8px"></div>
-        </div>`).join('')}
-    </div>`;
-}
-
 async function hydrateSheetAuthorZones(book, authorName, gen) {
   const mount = $('sheet-author-mount');
-  const booksMount = $('sheet-more-books-mount');
-  if (!mount || !booksMount) return;
-
-  const excludeTitle = book.info?.title || book.title;
+  if (!mount) return;
 
   if (!authorName) {
     if (gen !== bookSheetLoadGen) return;
     mount.innerHTML = '<p class="sheet-author-empty">Auteur non identifié sur cette détection.</p>';
-    booksMount.innerHTML = '';
     return;
   }
 
   mount.innerHTML = sheetAuthorSkeleton();
-  booksMount.innerHTML = sheetBooksSkeleton();
 
   try {
-    const [wiki, olSearch, gItems] = await Promise.all([
+    const [wiki, olSearch] = await Promise.all([
       fetchWikiAuthorSummary(authorName),
       fetch(`https://openlibrary.org/search/authors.json?q=${encodeURIComponent(authorName)}&limit=8`).then(r => r.json()).catch(() => ({ docs: [] })),
-      fetchGoogleBooksByAuthor(authorName, excludeTitle),
     ]);
 
     if (gen !== bookSheetLoadGen) return;
@@ -1236,29 +1225,19 @@ async function hydrateSheetAuthorZones(book, authorName, gen) {
     const docs = olSearch.docs || [];
     const picked = pickOlAuthorDoc(docs, authorName);
     let olDetail = null;
-    let olWorks = [];
     if (picked?.key) {
-      [olDetail, olWorks] = await Promise.all([
-        fetchOlAuthorDetail(picked.key),
-        fetchOlAuthorWorks(picked.key),
-      ]);
+      olDetail = await fetchOlAuthorDetail(picked.key);
     }
 
     if (gen !== bookSheetLoadGen) return;
 
-    const merged = mergeRecommendations(gItems, olWorks, excludeTitle, authorName);
     const m2 = $('sheet-author-mount');
-    const b2 = $('sheet-more-books-mount');
-    if (!m2 || !b2 || gen !== bookSheetLoadGen) return;
+    if (!m2 || gen !== bookSheetLoadGen) return;
     m2.innerHTML = renderAuthorSectionHtml(wiki, olDetail, picked, authorName);
-    book._catalogMoreBooksItems = merged;
-    await renderSheetMoreBooksCombined(book, gen);
   } catch {
     if (gen !== bookSheetLoadGen) return;
     const m2 = $('sheet-author-mount');
-    const b2 = $('sheet-more-books-mount');
     if (m2) m2.innerHTML = '<p class="sheet-author-empty">Impossible de charger les informations auteur (réseau ou limite).</p>';
-    if (b2) b2.innerHTML = '';
   }
 }
 
@@ -1306,7 +1285,7 @@ function buildSheetFactsStrip(book) {
   const inner = rows || catsHtml
     ? `<div class="sheet-facts-inner">${rows}${catsHtml}</div>`
     : `<div class="sheet-meta-callout sheet-meta-callout--warn" role="status">
-      <span class="sheet-meta-callout-ico" aria-hidden="true">📋</span>
+      <span class="sheet-meta-callout-ico" aria-hidden="true"></span>
       <div class="sheet-meta-callout-text">
         <span class="sheet-meta-callout-title">Infos édition incomplètes</span>
         <span class="sheet-meta-callout-detail">Pas d’ISBN ni détails catalogue pour l’instant — correspondance basée sur la photo et la reconnaissance du titre.</span>
@@ -1364,7 +1343,7 @@ function buildSheetReaderSection(book, llmPending) {
   const pourQuiRaw = typeof book.pour_qui === 'string' ? book.pour_qui.trim() : '';
   const pourQuiBlock = pourQuiRaw
     ? `<div class="sheet-insight">
-        <span class="sheet-insight-ico" aria-hidden="true">👤</span>
+        <span class="sheet-insight-ico" aria-hidden="true"></span>
         <div class="sheet-insight-main">
           <span class="sheet-field-label">Pour qui</span>
           <p class="sheet-insight-text">${esc(pourQuiRaw)}</p>
@@ -1389,15 +1368,20 @@ function buildSheetReaderSection(book, llmPending) {
     : '';
 
   const simPicks = readerSimilarPicksFromBook(book);
-  const simBlock = simPicks.length
+  const simGroups = simPicks.length ? groupSimilarPicksByDecadeDesc(simPicks) : [];
+  const simBlock = simGroups.length
     ? `<div class="sheet-similaire">
         <span class="sheet-field-label">Pour prolonger la lecture</span>
-        <div class="sheet-sim-list sheet-sim-list--actions" role="list">${simPicks.map(p => {
-    const label = `Ouvrir la fiche : ${p.title}`;
-    const au = p.author?.trim() ? esc(p.author.trim()) : '—';
-    const yr = p.year?.trim() ? esc(p.year.trim()) : '—';
-    const st = p.style?.trim() ? esc(p.style.trim()) : '—';
-    return `<button type="button" class="sheet-sim-open" role="listitem"
+        <div class="sheet-sim-decades">${simGroups.map(g => {
+    const head = g.label
+      ? `<h4 class="sheet-sim-decade-title">${esc(g.label)}</h4>`
+      : '';
+    const btns = g.items.map(p => {
+      const label = `Ouvrir la fiche : ${p.title}`;
+      const au = p.author?.trim() ? esc(p.author.trim()) : '—';
+      const yr = p.year?.trim() ? esc(p.year.trim()) : '—';
+      const st = p.style?.trim() ? esc(p.style.trim()) : '—';
+      return `<button type="button" class="sheet-sim-open" role="listitem"
         data-more-title="${esc(p.title)}"
         data-more-author="${esc(p.author)}"
         aria-label="${esc(label)}">
@@ -1412,7 +1396,11 @@ function buildSheetReaderSection(book, llmPending) {
           <span class="sheet-sim-open-meta">${esc(p.meta)}</span>
         </span>
       </button>`;
+    }).join('');
+    const noDec = g.label == null ? ' data-sheet-sim-no-decade' : '';
+    return `<section class="sheet-sim-decade"${noDec}>${head}<div class="sheet-sim-list sheet-sim-list--actions" role="list">${btns}</div></section>`;
   }).join('')}
+        </div>
       </div>`
     : '';
 
@@ -1449,7 +1437,7 @@ function buildSheetReaderSection(book, llmPending) {
 
   return `<section id="sheet-reader-host" class="sheet-panel sheet-panel--reader sheet-panel--dense" aria-labelledby="sheet-reader-heading">
         <div class="sheet-panel-head">
-          <span class="sheet-panel-orb" aria-hidden="true">🎯</span>
+          <span class="sheet-panel-orb sheet-panel-orb--reader" aria-hidden="true"></span>
           <div class="sheet-panel-head-text">
             <h3 id="sheet-reader-heading" class="sheet-panel-title">Profil de lecture</h3>
             <p class="sheet-panel-sub">Public, tonalité, prolongements — sans spoiler.</p>
@@ -1463,7 +1451,7 @@ function buildSheetCritiqueSection(book, llmPending) {
   const body = buildSheetCritiqueBodyHtml(book, llmPending);
   return `<section id="sheet-critique-host" class="sheet-panel sheet-panel--critique sheet-panel--dense sheet-panel--lead" aria-labelledby="sheet-critique-heading">
         <div class="sheet-panel-head">
-          <span class="sheet-panel-orb sheet-panel-orb--warm" aria-hidden="true">✨</span>
+          <span class="sheet-panel-orb sheet-panel-orb--warm" aria-hidden="true"></span>
           <div class="sheet-panel-head-text">
             <h3 id="sheet-critique-heading" class="sheet-panel-title">Critique IA</h3>
             <p class="sheet-panel-sub">${llmPending ? 'Synthèse en cours après la détection.' : 'Résumé lecture sans spoiler.'}</p>
@@ -1535,12 +1523,10 @@ async function runSheetLlmEnrich(book, idx, gen) {
       setSheetLlmBar(gen, 'error', 'Réponse IA illisible.');
       writeEnrichedBookAtIndex(book, idx);
       applySheetLlmDomPatch(book, gen);
-      await renderSheetMoreBooksCombined(book, gen);
       return;
     }
     writeEnrichedBookAtIndex(book, idx);
     applySheetLlmDomPatch(book, gen);
-    await renderSheetMoreBooksCombined(book, gen);
     setSheetLlmBar(gen, 'done');
     setTimeout(() => {
       if (gen === bookSheetLoadGen) setSheetLlmBar(gen, 'hidden');
@@ -1552,7 +1538,6 @@ async function runSheetLlmEnrich(book, idx, gen) {
     const msg = err?.message || 'Erreur réseau ou quota.';
     setSheetLlmBar(gen, 'error', msg);
     applySheetLlmDomPatch(book, gen);
-    await renderSheetMoreBooksCombined(book, gen);
   }
 }
 
@@ -1578,7 +1563,7 @@ function renderSheetShell(book, gen, opts = {}) {
   const blurbSection = blurbPlain
     ? `<details class="sheet-details sheet-details--compact">
         <summary class="sheet-details-sum">
-          <span class="sheet-details-ico" aria-hidden="true">📄</span>
+          <span class="sheet-details-ico sheet-details-ico--doc" aria-hidden="true"></span>
           <span class="sheet-details-sum-main">
             <span class="sheet-details-sum-title">Résumé éditeur</span>
             <span class="sheet-details-sum-hint">Peut spoiler — ouvrir avec précaution</span>
@@ -1617,15 +1602,15 @@ function renderSheetShell(book, gen, opts = {}) {
         <p class="sheet-cta-heading" id="sheet-retail-heading">Prix, disponibilité &amp; avis</p>
         <div class="sheet-cta-row sheet-cta-row--compact" role="group" aria-labelledby="sheet-retail-heading">
         <a class="sheet-cta sheet-cta--ghost sheet-cta--retail sheet-cta--compact" href="${R.fnac}" target="_blank" rel="noopener">
-          <span class="sheet-cta-ico" aria-hidden="true">🛒</span>
+          <span class="sheet-cta-ico sheet-cta-ico--bag" aria-hidden="true"></span>
           <span class="sheet-cta-copy"><span class="sheet-cta-label">Fnac</span><span class="sheet-cta-sub">Catalogue &amp; commande</span></span>
         </a>
         <a class="sheet-cta sheet-cta--ghost sheet-cta--retail sheet-cta--compact" href="${R.amazon}" target="_blank" rel="noopener">
-          <span class="sheet-cta-ico" aria-hidden="true">📦</span>
+          <span class="sheet-cta-ico sheet-cta-ico--bag" aria-hidden="true"></span>
           <span class="sheet-cta-copy"><span class="sheet-cta-label">Amazon</span><span class="sheet-cta-sub">Prix &amp; stock FR</span></span>
         </a>
         <a class="sheet-cta sheet-cta--ghost sheet-cta--retail sheet-cta--compact" href="${R.barnes}" target="_blank" rel="noopener">
-          <span class="sheet-cta-ico" aria-hidden="true">📗</span>
+          <span class="sheet-cta-ico sheet-cta-ico--bag" aria-hidden="true"></span>
           <span class="sheet-cta-copy"><span class="sheet-cta-label">B&amp;N</span><span class="sheet-cta-sub">Recherche US</span></span>
         </a>
         <a class="sheet-cta sheet-cta--ghost sheet-cta--retail sheet-cta--compact" href="${R.senscritique}" target="_blank" rel="noopener">
@@ -1645,24 +1630,13 @@ function renderSheetShell(book, gen, opts = {}) {
 
       <section class="sheet-panel sheet-panel--author sheet-panel--dense" aria-labelledby="sheet-author-heading">
         <div class="sheet-panel-head">
-          <span class="sheet-panel-orb sheet-panel-orb--cool" aria-hidden="true">✒️</span>
+          <span class="sheet-panel-orb sheet-panel-orb--cool" aria-hidden="true"></span>
           <div class="sheet-panel-head-text">
             <h3 id="sheet-author-heading" class="sheet-panel-title">L’auteur</h3>
             <p class="sheet-panel-sub">Bio &amp; bibliographie (sources ouvertes).</p>
           </div>
         </div>
         <div class="sheet-panel-body"><div id="sheet-author-mount">${sheetAuthorSkeleton()}</div></div>
-      </section>
-
-      <section class="sheet-panel sheet-panel--more sheet-panel--dense" aria-labelledby="sheet-more-heading">
-        <div class="sheet-panel-head">
-          <span class="sheet-panel-orb" aria-hidden="true">📚</span>
-          <div class="sheet-panel-head-text">
-            <h3 id="sheet-more-heading" class="sheet-panel-title">Poursuivre la lecture</h3>
-            <p class="sheet-panel-sub">Meilleurs titres repérés pour l’auteur (année de sortie) puis suggestions IA.</p>
-          </div>
-        </div>
-        <div class="sheet-panel-body"><div id="sheet-more-books-mount">${sheetBooksSkeleton()}</div></div>
       </section>
 
       <p class="sheet-footnote sheet-footnote--compact">Données agrégées (photo, Google Books, Open Library, IA) — à croiser.</p>
@@ -1765,7 +1739,7 @@ async function scan() {
   scanBtn.setAttribute('aria-busy', 'true');
   scanBtn.classList.add('scanning');
   vp.classList.add('scanning');
-  hideOverlay();
+  refreshScanPixelLayer();
   clearArLayer();
   expandResultsDrawer();
   setStatus('Étape 1/2 — analyse de l’image…');
@@ -1778,15 +1752,14 @@ async function scan() {
       setStatus(fastMode ? 'Réponse en cours (mode rapide)…' : 'Réception du modèle…');
     });
     if (!books.length) {
-      hideOverlay();
       showEmpty('Aucun livre identifié — rapprochez-vous ou améliorez la lumière');
       setStatus('Aucun livre détecté');
       setHint('Essayez un autre angle ou chargez une photo plus nette.');
       return;
     }
 
-    // Phase 1 résultat — bandeau rapide sur l’image (cadres RA + mini-cartes)
-    showOverlay(books);
+    // Phase 1 résultat — repères RA sur l’image ; détail dans le panneau du bas
+    renderArMarkers(books);
     setStatus(`Étape 2/2 — ${books.length} livre(s), chargement des couvertures…`);
     setHint('Patience : les fiches complètes arrivent dans le panneau du bas.');
 
@@ -1796,13 +1769,11 @@ async function scan() {
     );
     renderCards(enriched);
     patchArMarkersWithCovers(enriched);
-    hideOverlay();
     expandResultsDrawer();
     setStatus(`${enriched.length} livre(s) — fiches ci-dessous`);
     setHint('Touchez un livre ou un cadre orange pour ouvrir la fiche (bio auteur, autres titres…).');
 
   } catch (err) {
-    hideOverlay();
     showError(err.message || String(err));
     setStatus('Erreur — réessayez ou vérifiez la connexion');
     setHint('Vérifiez la clé API et votre réseau, puis Relancer depuis la fiche d’erreur.');
@@ -1811,6 +1782,7 @@ async function scan() {
     scanBtn.classList.remove('scanning');
     scanBtn.removeAttribute('aria-busy');
     vp.classList.remove('scanning');
+    clearScanPixelLayer();
     scanBtn.disabled = false;
   }
 }
@@ -1967,37 +1939,6 @@ function clearArLayer() {
   lastSourceSize = { w: 0, h: 0 };
 }
 
-// ── Overlay surimpression ─────────────────────────────────────────────────────
-function showOverlay(books) {
-  const carousel = $('overlay-carousel');
-  const count = $('overlay-count');
-
-  carousel.innerHTML = '';
-  count.textContent = `${books.length} livre${books.length > 1 ? 's' : ''} identifié${books.length > 1 ? 's' : ''}`;
-
-  renderArMarkers(books);
-
-  books.forEach(b => {
-    const color = CONF_DOT[b.confidence] || '#9ca3af';
-    const genreColor = GENRE_COLOR[b.genre] || '#6b7280';
-    const item = document.createElement('div');
-    item.className = 'overlay-item';
-    item.innerHTML = `
-      <span class="overlay-dot" style="background:${color}"></span>
-      <span class="overlay-title">${esc(b.title)}</span>
-      ${b.author ? `<span class="overlay-author">${esc(b.author)}</span>` : ''}
-      ${b.genre  ? `<span class="overlay-genre" style="color:${genreColor};background:${genreColor}22">${esc(b.genre)}</span>` : ''}
-    `;
-    carousel.appendChild(item);
-  });
-
-  $('book-overlay').classList.remove('hidden');
-}
-
-function hideOverlay() {
-  $('book-overlay').classList.add('hidden');
-}
-
 // ── Render ────────────────────────────────────────────────────────────────────
 const CONF_LABEL = { high: 'Sûr', medium: 'Probable', low: 'Incertain' };
 
@@ -2054,7 +1995,7 @@ function renderCards(books) {
       <article class="book-card" data-book-idx="${cardIdx}" tabindex="0" role="button" aria-label="Ouvrir la fiche : ${t}">
         <div class="card-top">
           <div class="book-thumb">
-            ${img ? `<img src="${img}" loading="lazy" alt="">` : '<span class="thumb-ph">📖</span>'}
+            ${img ? `<img src="${img}" loading="lazy" alt="">` : '<span class="thumb-ph" aria-hidden="true"></span>'}
           </div>
           <div class="card-meta">
             <div class="card-meta-head">
@@ -2145,7 +2086,6 @@ document.addEventListener('keydown', e => {
     closeBookSheet();
     return;
   }
-  if (!$('book-overlay').classList.contains('hidden')) hideOverlay();
 });
 
 function showSkeletons(n = 3) {
@@ -2194,7 +2134,6 @@ function loadFile(file) {
   const img = new Image();
   img.onload = () => {
     clearArLayer();
-    hideOverlay();
     if (uploadedImg) URL.revokeObjectURL(previewEl.src);
     uploadedImg = img;
     previewEl.src = url;
@@ -2222,7 +2161,6 @@ function resetPhotoState() {
     viewportEmpty.setAttribute('aria-hidden', 'false');
   }
   syncMainControlLabel();
-  hideOverlay();
   clearArLayer();
   setStatus(STATUS_IDLE_NO_IMAGE);
   setHint('');
@@ -2287,7 +2225,6 @@ function onMainButtonClick() {
 }
 
 scanBtn.addEventListener('click', onMainButtonClick);
-$('overlay-close').addEventListener('click', hideOverlay);
 resultsDrawerToggle?.addEventListener('click', () => {
   setResultsExpanded(resultsPanel.classList.contains('collapsed'));
 });
@@ -2334,7 +2271,6 @@ arLayer.addEventListener('click', e => {
   const m = e.target.closest('.ar-marker');
   if (!m) return;
   const idx = parseInt(m.dataset.bookIdx, 10);
-  hideOverlay();
   expandResultsDrawer();
   if (Number.isFinite(idx) && cachedEnrichedBooks[idx]) openBookSheet(idx);
 });
@@ -2367,7 +2303,7 @@ $('book-sheet-close')?.addEventListener('click', closeBookSheet);
 
 $('book-sheet')?.addEventListener('click', async e => {
   const mini = e.target.closest('[data-more-title]');
-  if (mini && mini.closest('#sheet-more-books-mount')) {
+  if (mini && mini.closest('#sheet-reader-host')) {
     e.preventDefault();
     const title = mini.getAttribute('data-more-title') || '';
     const author = mini.getAttribute('data-more-author') || '';

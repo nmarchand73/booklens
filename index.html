@@ -70,20 +70,12 @@
     </div>
     <img id="preview" class="hidden" alt="Photo à analyser">
     <canvas id="canvas" class="hidden"></canvas>
+    <canvas id="scan-pixel-layer" class="hidden" aria-hidden="true"></canvas>
     <button type="button" id="preview-back" class="preview-back hidden">↩ Autre photo</button>
 
     <!-- Repères RA : cadres alignés sur les livres détectés (bbox du modèle) -->
     <div id="ar-layer" class="ar-layer hidden" aria-hidden="true"></div>
 
-    <!-- Overlay — liste horizontale dès que Claude répond -->
-    <div id="book-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="overlay-count">
-      <div class="overlay-header">
-        <span id="overlay-count"></span>
-        <button type="button" id="overlay-close" aria-label="Fermer l’aperçu des livres">✕</button>
-      </div>
-      <div id="overlay-carousel"></div>
-      <p class="overlay-footnote" aria-hidden="true">Les fiches détaillées s’ouvrent ci-dessous.</p>
-    </div>
   </div>
 
   <div id="phase-strip" class="phase-strip">
@@ -93,13 +85,28 @@
 
   <div id="controls">
     <button type="button" id="upload-btn" class="side-btn" title="Photothèque, pellicule ou tout fichier image (upload)" aria-label="Importer depuis la photothèque ou un fichier">
-      <span class="btn-icon" aria-hidden="true">🖼️</span>
+      <span class="btn-icon" aria-hidden="true">
+        <svg class="ctrl-svg ctrl-svg--md" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.75"/>
+          <circle cx="8.5" cy="10" r="1.25" fill="currentColor"/>
+          <path d="M4 16l3.5-3.5a1.5 1.5 0 012.1 0L13 16m2-2l2.4-2.4a1.5 1.5 0 012.1 0L20 14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
       <span class="btn-label">Importer</span>
       <span class="btn-sublabel">photos ou fichier</span>
     </button>
     <div class="main-btn-wrap">
       <button type="button" id="scan-btn" class="main-btn" title="Appareil photo, ou envoyer l’image choisie" aria-label="Appareil photo ou envoyer l’analyse">
-        <span class="main-ring" aria-hidden="true"></span>
+        <span class="main-ring" aria-hidden="true">
+          <svg class="ctrl-svg main-ico main-ico--camera" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M4 9h2.5l1.2-2h8.6l1.2 2H20a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2v-7a2 2 0 012-2z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+            <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.75"/>
+          </svg>
+          <svg class="ctrl-svg main-ico main-ico--send hidden" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M22 2L11 13" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+        </span>
       </button>
       <span id="main-caption" class="main-caption">Photo</span>
     </div>
@@ -147,7 +154,12 @@
     <div class="book-sheet-drag-hint" aria-hidden="true"><span class="sheet-handle sheet-handle--detail"></span></div>
     <header class="book-sheet-toolbar">
       <div class="book-sheet-toolbar-lead">
-        <span class="book-sheet-toolbar-mark" aria-hidden="true">📚</span>
+        <span class="book-sheet-toolbar-mark" aria-hidden="true">
+          <svg class="book-sheet-toolbar-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+          </svg>
+        </span>
         <span class="book-sheet-toolbar-label">Fiche livre</span>
       </div>
       <button type="button" id="book-sheet-close" class="book-sheet-close" aria-label="Fermer la fiche">
