@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5">
+  <meta name="theme-color" content="#111111">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@9..144,500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://api.anthropic.com" crossorigin>
+  <link rel="dns-prefetch" href="https://www.googleapis.com">
+  <link rel="dns-prefetch" href="https://openlibrary.org">
+  <link rel="dns-prefetch" href="https://fr.wikipedia.org">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>BookLens</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="settings-modal" class="modal hidden">
+  <div class="modal-backdrop" id="modal-backdrop"></div>
+  <div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Paramètres</h2>
+    <div class="field">
+      <label for="api-key-input">Clé API Anthropic</label>
+      <div class="api-key-row">
+        <input type="password" id="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false">
+        <button type="button" id="toggle-key-btn" class="btn-secondary-ghost" title="Afficher ou masquer la clé">Afficher</button>
+      </div>
+      <small>Stockée localement dans le navigateur. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Créer une clé →</a></small>
+    </div>
+    <div class="field">
+      <label>Modèle Claude</label>
+      <select id="model-select">
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5 — rapide &amp; économique</option>
+        <option value="claude-sonnet-4-6" selected>Sonnet 4.6</option>
+      </select>
+    </div>
+    <div class="field field-row">
+      <label class="checkbox-label">
+        <input type="checkbox" id="fast-mode-check">
+        <span>Mode réactivité</span>
+      </label>
+      <small>Image plus légère et réponses plus courtes — souvent ~30–50&nbsp;% plus rapide. Combinez avec <strong>Haiku 4.5</strong> pour le maximum de vitesse.</small>
+    </div>
+    <button type="button" id="save-settings-btn" class="btn-primary">Enregistrer</button>
+  </div>
+</div>
+
+<div id="app">
+  <header>
+    <span class="logo">📚 BookLens</span>
+    <div class="header-actions">
+      <button type="button" id="settings-btn" class="icon-btn" title="Paramètres" aria-label="Ouvrir les paramètres">⚙️</button>
+    </div>
+  </header>
+
+  <div id="viewport">
+    <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
+      <span class="viewport-empty-ico" aria-hidden="true">📷</span>
+      <p class="viewport-empty-title">Une image du rayon</p>
+      <p class="viewport-empty-hint">Appareil photo, <strong>photothèque</strong> ou <strong>fichier</strong> — puis touchez Envoyer.</p>
+    </div>
+    <img id="preview" class="hidden" alt="Photo à analyser">
+    <canvas id="canvas" class="hidden"></canvas>
+    <button type="button" id="preview-back" class="preview-back hidden">↩ Autre photo</button>
+
+    <!-- Repères RA : cadres alignés sur les livres détectés (bbox du modèle) -->
+    <div id="ar-layer" class="ar-layer hidden" aria-hidden="true"></div>
+
+    <!-- Overlay — liste horizontale dès que Claude répond -->
+    <div id="book-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="overlay-count">
+      <div class="overlay-header">
+        <span id="overlay-count"></span>
+        <button type="button" id="overlay-close" aria-label="Fermer l’aperçu des livres">✕</button>
+      </div>
+      <div id="overlay-carousel"></div>
+      <p class="overlay-footnote" aria-hidden="true">Les fiches détaillées s’ouvrent ci-dessous.</p>
+    </div>
+  </div>
+
+  <div id="phase-strip" class="phase-strip">
+    <p id="status" role="status" aria-live="polite">Ajoutez une image du rayon</p>
+    <p id="hint-line" class="phase-hint">Appareil photo · banque de photos · fichier à importer — une image à la fois.</p>
+  </div>
+
+  <div id="controls">
+    <button type="button" id="upload-btn" class="side-btn" title="Photothèque, pellicule ou tout fichier image (upload)" aria-label="Importer depuis la photothèque ou un fichier">
+      <span class="btn-icon" aria-hidden="true">🖼️</span>
+      <span class="btn-label">Importer</span>
+      <span class="btn-sublabel">photos ou fichier</span>
+    </button>
+    <div class="main-btn-wrap">
+      <button type="button" id="scan-btn" class="main-btn" title="Appareil photo, ou envoyer l’image choisie" aria-label="Appareil photo ou envoyer l’analyse">
+        <span class="main-ring" aria-hidden="true"></span>
+      </button>
+      <span id="main-caption" class="main-caption">Photo</span>
+    </div>
+    <div class="controls-spacer" aria-hidden="true"></div>
+  </div>
+
+  <input type="file" id="file-input-camera" accept="image/*" capture="environment" class="hidden">
+  <input type="file" id="file-input-gallery" accept="image/*" class="hidden">
+
+  <div id="results" class="results-drawer" aria-label="Fiches livres">
+    <div class="results-drawer-head">
+      <button type="button" id="results-drawer-toggle" class="results-drawer-toggle" aria-expanded="true" aria-controls="results-panel-body">
+        <span class="drawer-grip" aria-hidden="true"></span>
+        <span id="results-label" class="results-drawer-title">Aucun résultat</span>
+        <span class="drawer-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <button type="button" id="clear-btn" class="btn-text-clear">Effacer</button>
+    </div>
+    <div id="results-panel-body" class="results-panel-body">
+      <div id="results-list">
+        <p class="empty-hint">Envoyez une photo de rayon pour découvrir les critiques</p>
+      </div>
+      <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Fiche livre plein écran (mobile) -->
+<div id="book-sheet" class="book-sheet hidden" aria-hidden="true">
+  <div class="book-sheet-backdrop" id="book-sheet-backdrop"></div>
+  <div class="book-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-book-title">
+    <div class="book-sheet-drag-hint" aria-hidden="true"><span class="sheet-handle sheet-handle--detail"></span></div>
+    <header class="book-sheet-toolbar">
+      <div class="book-sheet-toolbar-lead">
+        <span class="book-sheet-toolbar-mark" aria-hidden="true">📚</span>
+        <span class="book-sheet-toolbar-label">Fiche livre</span>
+      </div>
+      <button type="button" id="book-sheet-close" class="book-sheet-close" aria-label="Fermer la fiche">
+        <span class="book-sheet-close-icon" aria-hidden="true">✕</span>
+      </button>
+    </header>
+    <div class="book-sheet-scroll" id="book-sheet-scroll">
+      <div id="book-sheet-body"></div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

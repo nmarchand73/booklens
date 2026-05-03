@@ -1,0 +1,7 @@
+# Local tooling
+.claude/
+.playwright-mcp/
+
+# OS
+Thumbs.db
+.DS_Store
