@@ -2055,3 +2055,199 @@ header {
   position: relative;
   z-index: 2;
 }
+
+/* ── Wishlist (P0–P2) ─────────────────────────────────────────────────────── */
+#wishlist-modal.modal {
+  z-index: 230;
+}
+.wishlist-header-btn {
+  position: relative;
+}
+.wishlist-header-ico {
+  font-size: 17px;
+  line-height: 1;
+  opacity: 0.92;
+}
+.wishlist-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  pointer-events: none;
+}
+.card-meta-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+.card-meta-stack {
+  flex: 1;
+  min-width: 0;
+}
+.wishlist-card-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin-top: -2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surf2);
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wishlist-card-btn.is-on {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.45);
+  background: rgba(251, 113, 133, 0.12);
+}
+.wishlist-card-btn:active {
+  transform: scale(0.96);
+}
+
+.sheet-wishlist-row {
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+.wishlist-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surf2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wishlist-chip-btn.is-on {
+  border-color: rgba(251, 113, 133, 0.5);
+  background: rgba(251, 113, 133, 0.14);
+  color: #fda4af;
+}
+.wishlist-chip-btn:active {
+  opacity: 0.9;
+}
+
+.wishlist-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.wishlist-modal-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.btn-wishlist-clear {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  min-height: 40px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-wishlist-clear:not(:disabled):active {
+  background: var(--surf2);
+  color: var(--text);
+}
+.btn-wishlist-clear:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.wishlist-modal-sheet {
+  max-height: min(78vh, 560px);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+.wishlist-body {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: 52vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -6px;
+  padding: 0 6px 8px;
+}
+.wishlist-empty {
+  padding-top: 8px;
+}
+.wishlist-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.wishlist-row-thumb {
+  width: 44px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: var(--r-xs);
+  overflow: hidden;
+  background: var(--surf2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.wishlist-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.wishlist-row-thumb--ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.wishlist-row-text {
+  flex: 1;
+  min-width: 0;
+}
+.wishlist-row-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+.wishlist-row-author {
+  font-size: 12px;
+  color: var(--muted);
+}
+.wishlist-remove-btn {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.wishlist-remove-btn:active {
+  background: var(--surf2);
+  color: var(--text);
+}

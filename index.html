@@ -53,6 +53,10 @@
   <header>
     <span class="logo">📚 BookLens</span>
     <div class="header-actions">
+      <button type="button" id="wishlist-btn" class="icon-btn wishlist-header-btn" title="Ma liste" aria-label="Ma liste">
+        <span class="wishlist-header-ico" aria-hidden="true">♥</span>
+        <span id="wishlist-badge" class="wishlist-badge" hidden>0</span>
+      </button>
       <button type="button" id="settings-btn" class="icon-btn" title="Paramètres" aria-label="Ouvrir les paramètres">⚙️</button>
     </div>
   </header>
@@ -139,6 +143,18 @@
     <div class="book-sheet-scroll" id="book-sheet-scroll">
       <div id="book-sheet-body"></div>
     </div>
+  </div>
+</div>
+
+<div id="wishlist-modal" class="modal hidden">
+  <div class="modal-backdrop" id="wishlist-modal-backdrop"></div>
+  <div class="modal-sheet wishlist-modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="wishlist-modal-head">
+      <h2>Ma liste</h2>
+      <button type="button" id="wishlist-clear-all" class="btn-wishlist-clear" disabled>Vider la liste…</button>
+    </div>
+    <div id="wishlist-body" class="wishlist-body"></div>
   </div>
 </div>
 

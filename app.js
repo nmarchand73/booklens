@@ -24,6 +24,11 @@ let cachedEnrichedBooks = [];
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
 
+const WISHLIST_STORAGE_KEY = 'bl_wishlist_json';
+const WISHLIST_SCHEMA_VERSION = 1;
+/** Entrées persistantes (jamais d’index de session seul). */
+let wishlistItems = [];
+
 const $ = id => document.getElementById(id);
 const canvas       = $('canvas');
 const previewEl    = $('preview');
@@ -38,6 +43,12 @@ const statusEl     = $('status');
 const resultsList  = $('results-list');
 const resultsLabel = $('results-label');
 const clearBtn     = $('clear-btn');
+const wishlistBtn = $('wishlist-btn');
+const wishlistBadge = $('wishlist-badge');
+const wishlistModal = $('wishlist-modal');
+const wishlistBackdrop = $('wishlist-modal-backdrop');
+const wishlistBody = $('wishlist-body');
+const wishlistClearAll = $('wishlist-clear-all');
 const settingsBtn  = $('settings-btn');
 const modal        = $('settings-modal');
 const backdrop     = $('modal-backdrop');
@@ -78,6 +89,8 @@ function syncMainControlLabel() {
   syncMainControlLabel();
   if (!apiKey) openSettings();
 })();
+wishlistReloadFromDisk();
+updateWishlistHeaderBadge();
 
 // ── Frame capture ─────────────────────────────────────────────────────────────
 function captureBase64() {
@@ -431,6 +444,172 @@ function pickPrimaryIsbn(info) {
   if (i13?.identifier) return String(i13.identifier).replace(/\s|-/g, '');
   const i10 = ids.find(x => x.type === 'ISBN_10');
   return i10?.identifier ? String(i10.identifier) : '';
+}
+
+// ── Wishlist (localStorage, P0–P2 : id stable, Effacer ≠ liste, schéma v1, quota, multi-onglets) ──
+function enrichedBookStableId(book) {
+  if (!book || typeof book !== 'object') return 'key::';
+  const isbn = pickPrimaryIsbn(book.info);
+  if (isbn) return `isbn:${isbn}`;
+  const title = book.info?.title || book.title || '';
+  const author = book.info?.authors?.join(', ') || book.author || '';
+  return `key:${normTitle(title)}::${normTitle(primaryAuthor(author))}`;
+}
+
+function wishlistPayloadFromBook(book) {
+  const title = book.info?.title || book.title || '';
+  const author = book.info?.authors?.join(', ') || book.author || '';
+  const id = enrichedBookStableId(book);
+  const thumb = book.info?.imageLinks?.thumbnail?.replace('http:', 'https:')
+    || book.info?.imageLinks?.smallThumbnail?.replace('http:', 'https:') || null;
+  const isbn = pickPrimaryIsbn(book.info) || '';
+  return {
+    id,
+    title: (title || 'Sans titre').slice(0, 500),
+    author: (author || 'Auteur inconnu').slice(0, 300),
+    isbn: isbn.slice(0, 24),
+    genre: typeof book.genre === 'string' ? book.genre.slice(0, 120) : null,
+    thumbUrl: thumb ? thumb.slice(0, 2000) : null,
+    addedAt: Date.now(),
+  };
+}
+
+function wishlistHasId(id) {
+  return wishlistItems.some(x => x.id === id);
+}
+
+function parseWishlistItemsArray(arr) {
+  const out = [];
+  if (!Array.isArray(arr)) return out;
+  for (const it of arr) {
+    if (!it || typeof it !== 'object' || typeof it.id !== 'string' || !it.id) continue;
+    out.push({
+      id: it.id,
+      title: String(it.title || 'Sans titre').slice(0, 500),
+      author: String(it.author || '').slice(0, 300),
+      isbn: String(it.isbn || '').slice(0, 24),
+      genre: typeof it.genre === 'string' ? it.genre.slice(0, 120) : null,
+      thumbUrl: typeof it.thumbUrl === 'string' ? it.thumbUrl.slice(0, 2000) : null,
+      addedAt: Number.isFinite(it.addedAt) ? it.addedAt : Date.now(),
+    });
+  }
+  return out;
+}
+
+function wishlistReloadFromDisk() {
+  wishlistItems = [];
+  try {
+    const raw = localStorage.getItem(WISHLIST_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const arr = parsed?.items ?? (Array.isArray(parsed) ? parsed : []);
+    wishlistItems = parseWishlistItemsArray(arr);
+  } catch {
+    wishlistItems = [];
+  }
+}
+
+function wishlistApplyFromJsonString(jsonStr) {
+  wishlistItems = [];
+  if (jsonStr == null) return;
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const arr = parsed?.items ?? (Array.isArray(parsed) ? parsed : []);
+    wishlistItems = parseWishlistItemsArray(arr);
+  } catch {
+    wishlistItems = [];
+  }
+}
+
+function wishlistPersist() {
+  const payload = JSON.stringify({ v: WISHLIST_SCHEMA_VERSION, items: wishlistItems });
+  try {
+    localStorage.setItem(WISHLIST_STORAGE_KEY, payload);
+    return { ok: true };
+  } catch (e) {
+    const quota = e?.name === 'QuotaExceededError' || e?.code === 22;
+    return { ok: false, quota };
+  }
+}
+
+function wishlistToggleFromBook(book) {
+  const next = wishlistPayloadFromBook(book);
+  const pos = wishlistItems.findIndex(x => x.id === next.id);
+  const snapshot = wishlistItems.map(x => ({ ...x }));
+  if (pos >= 0) wishlistItems.splice(pos, 1);
+  else wishlistItems.unshift(next);
+  const r = wishlistPersist();
+  if (!r.ok) {
+    wishlistItems = snapshot;
+    return { ok: false, quota: r.quota };
+  }
+  return { ok: true, added: pos < 0 };
+}
+
+function updateWishlistHeaderBadge() {
+  if (!wishlistBtn || !wishlistBadge) return;
+  const n = wishlistItems.length;
+  wishlistBadge.textContent = n > 99 ? '99+' : String(n);
+  wishlistBadge.hidden = n === 0;
+  wishlistBtn.setAttribute('aria-label', n ? `Ma liste, ${n} livre(s)` : 'Ma liste (vide)');
+}
+
+function patchSheetWishlistButton() {
+  const btn = $('sheet-wishlist-btn');
+  const sheet = $('book-sheet');
+  if (!btn || !sheet || sheet.classList.contains('hidden')) return;
+  const idx = parseInt(sheet.dataset.sheetBookIdx ?? '', 10);
+  const book = Number.isFinite(idx) ? cachedEnrichedBooks[idx] : null;
+  if (!book) return;
+  const on = wishlistHasId(enrichedBookStableId(book));
+  btn.classList.toggle('is-on', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.textContent = on ? '♥ En liste' : '♡ Ajouter à ma liste';
+}
+
+function refreshWishlistDependentUi() {
+  updateWishlistHeaderBadge();
+  patchSheetWishlistButton();
+  renderWishlistPanelBody();
+  if (resultsPanel?.classList.contains('has-results') && Array.isArray(cachedEnrichedBooks) && cachedEnrichedBooks.length) {
+    renderCards(cachedEnrichedBooks);
+    patchArMarkersWithCovers(cachedEnrichedBooks);
+  }
+}
+
+function openWishlistModal() {
+  if (!wishlistModal) return;
+  renderWishlistPanelBody();
+  wishlistModal.classList.remove('hidden');
+}
+
+function closeWishlistModal() {
+  wishlistModal?.classList.add('hidden');
+}
+
+function renderWishlistPanelBody() {
+  if (!wishlistBody) return;
+  if (wishlistClearAll) wishlistClearAll.disabled = wishlistItems.length === 0;
+  if (!wishlistItems.length) {
+    wishlistBody.innerHTML = '<p class="empty-hint wishlist-empty">Aucun livre en liste. Ajoutez depuis une carte ou la fiche détail.</p>';
+    return;
+  }
+  wishlistBody.innerHTML = wishlistItems.map(it => {
+    const t = esc(it.title);
+    const a = esc(it.author);
+    const safeId = encodeURIComponent(it.id);
+    const img = it.thumbUrl
+      ? `<div class="wishlist-row-thumb"><img src="${esc(it.thumbUrl)}" alt="" loading="lazy"></div>`
+      : '<div class="wishlist-row-thumb wishlist-row-thumb--ph" aria-hidden="true">📖</div>';
+    return `<article class="wishlist-row">
+      ${img}
+      <div class="wishlist-row-text">
+        <div class="wishlist-row-title">${t}</div>
+        <div class="wishlist-row-author">${a}</div>
+      </div>
+      <button type="button" class="wishlist-remove-btn" data-wishlist-remove="${safeId}" aria-label="Retirer de la liste : ${t}">Retirer</button>
+    </article>`;
+  }).join('');
 }
 
 /** Affichage lisible de publishedDate Google Books (YYYY, YYYY-MM, etc.). */
@@ -1042,6 +1221,7 @@ function applySheetLlmDomPatch(book, gen) {
   }
   const c = $('sheet-critique-host');
   if (c) c.outerHTML = buildSheetCritiqueSection(book, false);
+  patchSheetWishlistButton();
 }
 
 function setSheetLlmBar(gen, mode, detail) {
@@ -1109,6 +1289,10 @@ function renderSheetShell(book, gen, opts = {}) {
   const subRaw = book.info?.subtitle;
   const subtitleHtml = subRaw ? `<p class="sheet-subtitle">${esc(subRaw)}</p>` : '';
   const genreLabel = book.genre ? esc(book.genre) : 'Livre';
+  const wlOn = wishlistHasId(enrichedBookStableId(book));
+  const wishlistBtnHtml = `<div class="sheet-wishlist-row">
+    <button type="button" id="sheet-wishlist-btn" class="wishlist-chip-btn${wlOn ? ' is-on' : ''}" aria-pressed="${wlOn ? 'true' : 'false'}">${wlOn ? '♥ En liste' : '♡ Ajouter à ma liste'}</button>
+  </div>`;
 
   const factsHtml = buildSheetFactsStrip(book);
   const metricsHtml = buildSheetMetricsBlock(book);
@@ -1146,6 +1330,7 @@ function renderSheetShell(book, gen, opts = {}) {
           <h2 id="sheet-book-title" class="sheet-title">${esc(titleRaw)}</h2>
           ${subtitleHtml}
           <p class="sheet-byline sheet-byline--compact">Par <strong>${authorNameHtml}</strong></p>
+          ${wishlistBtnHtml}
           <div class="sheet-hero-status">
             ${metricsHtml}
             ${factsHtml}
@@ -1217,6 +1402,7 @@ function openBookSheet(idx) {
   bookSheetLoadGen += 1;
   const gen = bookSheetLoadGen;
   const sheet = $('book-sheet');
+  sheet.dataset.sheetBookIdx = String(idx);
   sheet.classList.remove('hidden');
   sheet.setAttribute('aria-hidden', 'false');
   document.body.style.overflow = 'hidden';
@@ -1517,7 +1703,8 @@ function renderCards(books) {
   resultsLabel.textContent = `${books.length} livre(s)`;
   resultsPanel.classList.add('has-results');
 
-  books.forEach(({ title, author, confidence, genre, note, critique, info }, cardIdx) => {
+  books.forEach((book, cardIdx) => {
+    const { title, author, confidence, genre, note, critique, info } = book;
     const t     = esc(info?.title || title);
     const a     = esc(info?.authors?.join(', ') || author || 'Auteur inconnu');
     const img   = info?.imageLinks?.thumbnail?.replace('http:', 'https:');
@@ -1529,6 +1716,8 @@ function renderCards(books) {
     const teaser = critique
       ? esc(critique.length > 140 ? `${critique.slice(0, 137)}…` : critique)
       : '';
+    const onWl = wishlistHasId(enrichedBookStableId(book));
+    const wlLabel = onWl ? 'Retirer de ma liste' : 'Ajouter à ma liste';
 
     const R = retailSearchUrls(title, author);
 
@@ -1539,16 +1728,21 @@ function renderCards(books) {
             ${img ? `<img src="${img}" loading="lazy" alt="">` : '<span class="thumb-ph">📖</span>'}
           </div>
           <div class="card-meta">
-            <div class="book-title">${t}</div>
-            <div class="book-author">${a}</div>
-            <div class="tag-row">
-              ${gStr ? `<span class="tag tag-genre" ${genreStyle(genre)}>${gStr}</span>` : ''}
-              ${displayNote ? `<span class="tag tag-note" title="Note publique">★ ${Number(displayNote).toFixed(1)}</span>` : ''}
-              ${year   ? `<span class="tag tag-meta">${year}</span>` : ''}
-              ${pages  ? `<span class="tag tag-meta">${pages} p.</span>` : ''}
-              <span class="tag conf-${conf}">${CONF_LABEL[conf] || conf}</span>
+            <div class="card-meta-head">
+              <div class="card-meta-stack">
+                <div class="book-title">${t}</div>
+                <div class="book-author">${a}</div>
+                <div class="tag-row">
+                  ${gStr ? `<span class="tag tag-genre" ${genreStyle(genre)}>${gStr}</span>` : ''}
+                  ${displayNote ? `<span class="tag tag-note" title="Note publique">★ ${Number(displayNote).toFixed(1)}</span>` : ''}
+                  ${year   ? `<span class="tag tag-meta">${year}</span>` : ''}
+                  ${pages  ? `<span class="tag tag-meta">${pages} p.</span>` : ''}
+                  <span class="tag conf-${conf}">${CONF_LABEL[conf] || conf}</span>
+                </div>
+                ${teaser ? `<p class="card-teaser">${teaser}</p>` : ''}
+              </div>
+              <button type="button" class="wishlist-card-btn${onWl ? ' is-on' : ''}" data-wishlist-card="${cardIdx}" aria-pressed="${onWl ? 'true' : 'false'}" aria-label="${esc(wlLabel)}" title="${esc(wlLabel)}">${onWl ? '♥' : '♡'}</button>
             </div>
-            ${teaser ? `<p class="card-teaser">${teaser}</p>` : ''}
           </div>
         </div>
         <div class="book-card-hint"><span>Fiche complète</span><span>›</span></div>
@@ -1567,6 +1761,21 @@ resultsList.addEventListener('click', e => {
     scan();
     return;
   }
+  const wlCard = e.target.closest('[data-wishlist-card]');
+  if (wlCard) {
+    e.preventDefault();
+    e.stopPropagation();
+    const ci = parseInt(wlCard.getAttribute('data-wishlist-card'), 10);
+    const b = Number.isFinite(ci) ? cachedEnrichedBooks[ci] : null;
+    if (!b) return;
+    const r = wishlistToggleFromBook(b);
+    if (!r.ok) {
+      setHint(r.quota ? 'Stockage plein : retirez des livres de la liste ou libérez de l’espace navigateur.' : 'Impossible d’enregistrer la liste.');
+      return;
+    }
+    refreshWishlistDependentUi();
+    return;
+  }
   if (e.target.closest('a.card-link')) return;
   const card = e.target.closest('.book-card');
   if (!card) return;
@@ -1575,6 +1784,13 @@ resultsList.addEventListener('click', e => {
 });
 
 resultsList.addEventListener('keydown', e => {
+  const wlBtn = e.target.closest('[data-wishlist-card]');
+  if (wlBtn && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    e.stopPropagation();
+    wlBtn.click();
+    return;
+  }
   if (e.key !== 'Enter' && e.key !== ' ') return;
   const card = e.target.closest('.book-card');
   if (!card || e.target.closest('a.card-link')) return;
@@ -1585,6 +1801,10 @@ resultsList.addEventListener('keydown', e => {
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  if (wishlistModal && !wishlistModal.classList.contains('hidden')) {
+    closeWishlistModal();
+    return;
+  }
   if (!modal.classList.contains('hidden')) {
     closeSettings();
     return;
@@ -1732,7 +1952,7 @@ previewBack.addEventListener('click', resetPhotoState);
 viewportEmpty?.addEventListener('click', () => { if (!busy) fileInputCamera?.click(); });
 clearBtn.addEventListener('click', () => {
   if (resultsPanel.classList.contains('has-results') && resultsList.querySelector('.book-card')) {
-    if (!confirm('Effacer tous les résultats ?')) return;
+    if (!confirm('Effacer les résultats du scan ? Votre liste de souhaits locale est conservée.')) return;
   }
   clearArLayer();
   cachedEnrichedBooks = [];
@@ -1790,3 +2010,59 @@ document.addEventListener('paste', e => {
 
 $('book-sheet-backdrop')?.addEventListener('click', closeBookSheet);
 $('book-sheet-close')?.addEventListener('click', closeBookSheet);
+
+$('book-sheet')?.addEventListener('click', e => {
+  if (!e.target.closest('#sheet-wishlist-btn')) return;
+  const sheet = $('book-sheet');
+  const idx = parseInt(sheet?.dataset.sheetBookIdx ?? '', 10);
+  const book = Number.isFinite(idx) ? cachedEnrichedBooks[idx] : null;
+  if (!book) return;
+  const r = wishlistToggleFromBook(book);
+  if (!r.ok) {
+    setHint(r.quota ? 'Stockage plein : retirez des livres de la liste ou libérez de l’espace navigateur.' : 'Impossible d’enregistrer la liste.');
+    return;
+  }
+  patchSheetWishlistButton();
+  updateWishlistHeaderBadge();
+  renderWishlistPanelBody();
+  if (resultsPanel?.classList.contains('has-results') && cachedEnrichedBooks?.length) {
+    renderCards(cachedEnrichedBooks);
+    patchArMarkersWithCovers(cachedEnrichedBooks);
+  }
+});
+
+wishlistBtn?.addEventListener('click', () => openWishlistModal());
+wishlistBackdrop?.addEventListener('click', () => closeWishlistModal());
+wishlistClearAll?.addEventListener('click', () => {
+  if (!wishlistItems.length) return;
+  if (!confirm('Vider toute la liste de souhaits ? Cette action est indépendante des résultats de scan.')) return;
+  wishlistItems = [];
+  const r = wishlistPersist();
+  if (!r.ok) {
+    setHint('Impossible de mettre à jour le stockage local.');
+    return;
+  }
+  refreshWishlistDependentUi();
+});
+
+wishlistBody?.addEventListener('click', e => {
+  const rm = e.target.closest('[data-wishlist-remove]');
+  if (!rm) return;
+  const id = decodeURIComponent(rm.getAttribute('data-wishlist-remove') || '');
+  if (!id) return;
+  wishlistItems = wishlistItems.filter(x => x.id !== id);
+  const r = wishlistPersist();
+  if (!r.ok) {
+    wishlistReloadFromDisk();
+    setHint('Impossible de mettre à jour le stockage local.');
+    return;
+  }
+  refreshWishlistDependentUi();
+});
+
+window.addEventListener('storage', e => {
+  if (e.key !== WISHLIST_STORAGE_KEY) return;
+  if (e.newValue == null) wishlistItems = [];
+  else wishlistApplyFromJsonString(e.newValue);
+  refreshWishlistDependentUi();
+});
