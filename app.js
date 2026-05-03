@@ -23,6 +23,8 @@ let lastEnrichedForAr = [];
 let cachedEnrichedBooks = [];
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
+/** Fiche ouverte depuis « Poursuivre la lecture » (hors liste de scan). */
+let sheetDetachedBook = null;
 
 const WISHLIST_STORAGE_KEY = 'bl_wishlist_json';
 const WISHLIST_SCHEMA_VERSION = 1;
@@ -306,7 +308,7 @@ const SYSTEM_SHEET_DETAIL = `Tu es critique littéraire professionnel et conseil
 Tu réponds exclusivement par UN objet JSON UTF-8 valide. Aucun markdown, aucun texte hors du JSON.
 La clé "critique" doit être une vraie critique argumentée : cadrage du livre, mérites littéraires ou narratifs, limites éventuelles, public visé — sans spoiler majeur ni formules publicitaires creuses.
 Si tu ne connais pas le livre, utilise null, [] ou chaînes vides là où c'est indiqué et une courte critique explicitant l'incertitude et ce qu'il faudrait vérifier avant achat.
-Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention).`;
+Pour "livres_similaires", cite uniquement des livres réels avec titre et auteur exacts tels qu'en librairie (pas d'invention). Pour chaque suggestion, fournis aussi "annee" (année de première parution en 4 chiffres, ou null si incertain) et "style" (genre ou registre court en français, ex. « polar psychologique », ou null). Le champ "accroche" doit donner une idée concrète de l'intrigue (situation initiale, protagoniste, conflit ou mystère posé), pas un rappel de genre ni une phrase sur le ton ou la qualité du suspense : le genre va dans "style".`;
 
 const MAX_TOKENS_SHEET_DETAIL = 4096;
 
@@ -398,10 +400,61 @@ function parseSiSimilaireLine(line) {
     if (i > 0) {
       const titre = s.slice(0, i).trim();
       const auteur = s.slice(i + sep.length).trim();
-      if (titre && auteur) return { titre, auteur, accroche: '' };
+      if (titre && auteur) return { titre, auteur, accroche: '', annee: '', style: '' };
     }
   }
   return null;
+}
+
+/** Année ou date courte affichable (parution) pour les cartes « prolonger la lecture ». */
+function normalizeYearField(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const y = Math.floor(raw);
+    if (y > 1000 && y < 2100) return String(y);
+    return '';
+  }
+  const s = String(raw).trim();
+  if (!s) return '';
+  const m = s.match(/\b(1[89]\d{2}|20\d{2})\b/);
+  if (m) return m[1];
+  if (/^\d{4}$/.test(s)) return s;
+  return s.length <= 12 ? s : s.slice(0, 10);
+}
+
+/** Titres pour « Pour prolonger la lecture » (même source que la bande horizontale). */
+function readerSimilarPicksFromBook(book) {
+  const rows = Array.isArray(book.livres_similaires_ia) ? book.livres_similaires_ia : [];
+  if (rows.length) {
+    return rows
+      .map(r => ({
+        title: String(r.titre ?? '').trim(),
+        author: String(r.auteur ?? '').trim(),
+        year: normalizeYearField(r.annee ?? r.date ?? r.year ?? r.publishedDate ?? ''),
+        style: String(r.style ?? r.genre ?? r.type ?? '').trim(),
+        meta: String(r.accroche ?? '').trim() || 'Suggestion IA',
+      }))
+      .filter(p => p.title);
+  }
+  const raw = Array.isArray(book.si_similaire) ? book.si_similaire : [];
+  const out = [];
+  for (const line of raw) {
+    const s = String(line || '').trim();
+    if (!s) continue;
+    const parsed = parseSiSimilaireLine(s);
+    if (parsed) {
+      out.push({
+        title: parsed.titre,
+        author: parsed.auteur,
+        year: normalizeYearField(parsed.annee ?? ''),
+        style: String(parsed.style ?? '').trim(),
+        meta: parsed.accroche?.trim() || 'Suggestion IA',
+      });
+    } else {
+      out.push({ title: s, author: '', year: '', style: '', meta: 'Suggestion IA' });
+    }
+  }
+  return out;
 }
 
 async function fetchSheetDetailFromLlm(book) {
@@ -440,7 +493,7 @@ Réponds par un objet JSON avec exactement ces clés :
 - "recompenses" : string, prix ou distinctions pour CE titre, ou null
 - "place_dans_loeuvre" : string, une phrase sur ce roman dans la bibliographie de l'auteur (chef-d'œuvre, entrée, pivot…), ou null
 - "critique" : string, critique littéraire professionnelle en français : 8 à 14 phrases réparties en 3 ou 4 paragraphes courts (séparés par deux retours à la ligne \\n\\n). Contenu attendu — sans spoiler majeur ni résumé scène par scène : (1) annonce et cadrage — nature de l'ouvrage, promesse et originalité relative dans son genre ; (2) analyse — style, voix, construction narrative ou développement des idées ; personnages ou tension selon le cas ; (3) bilan — forces principales et réserves argumentées (longueur, facilité, redites…) ; (4) verdict — pour quel lecteur, avec quel niveau d'attente ; préciser si le titre tient la promesse éditoriale. Interdit : langage publicitaire, superlatifs gratuits, « coup de cœur », mystère fake. Si les infos sont insuffisantes, le dire clairement et orienter la décision (acheter / attendre / chercher un extrait).
-- "livres_similaires" : tableau de 5 à 8 objets {"titre": string, "auteur": string, "accroche": string|null} — œuvres réelles publiées (titres exacts) pour prolonger la lecture si on a aimé CE livre ; privilégier d'autres auteurs ou titres comparables ; accroche = une courte phrase sans spoiler sur le rapprochement ; ne pas inclure le titre analysé ni sa suite directe évidente
+- "livres_similaires" : tableau de 5 à 8 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number|null, "style": string|null} — œuvres réelles publiées (titres exacts) pour prolonger la lecture si on a aimé CE livre ; privilégier d'autres auteurs ou titres comparables ; annee = année de première parution (4 chiffres) si connue sinon null ; style = genre ou registre court en français (ex. « polar », « autofiction ») sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) qui donnent une idée nette de l'intrigue : qui fait quoi, quel problème ou mystère est lancé, sans spoiler de résolution ; interdit : répéter ou paraphraser le contenu de "style", formulations du type « thriller où le suspense… », « polar de haute tension », commentaires sur la qualité littéraire ou le ton ; ne pas inclure le titre analysé ni sa suite directe évidente
 - "si_similaire" : (optionnel) tableau de chaînes "Titre — Auteur" aligné sur les mêmes livres, ou [] si tu as déjà tout mis dans livres_similaires`;
 
   const text = await claudeNonStreamRequest({
@@ -475,9 +528,15 @@ function mergeSheetDetailIntoBook(book, d) {
       .map(x => ({
         titre: String(x.titre ?? x.title ?? '').trim(),
         auteur: String(x.auteur ?? x.author ?? '').trim(),
-        accroche: typeof x.accroche === 'string'
-          ? x.accroche.trim()
-          : (typeof x.pourquoi === 'string' ? x.pourquoi.trim() : ''),
+        accroche: (() => {
+          const a = typeof x.accroche === 'string' ? x.accroche.trim() : '';
+          if (a) return a;
+          const intr = typeof x.intrigue === 'string' ? x.intrigue.trim() : '';
+          if (intr) return intr;
+          return typeof x.pourquoi === 'string' ? x.pourquoi.trim() : '';
+        })(),
+        annee: normalizeYearField(x.annee ?? x.date ?? x.parution ?? x.year ?? x.publishedDate ?? x.date_parution ?? ''),
+        style: String(x.style ?? x.genre ?? x.type ?? '').trim(),
       }))
       .filter(x => x.titre && x.auteur)
       .slice(0, 10);
@@ -718,12 +777,20 @@ function updateWishlistHeaderBadge() {
   wishlistBtn.setAttribute('aria-label', n ? `Ma liste, ${n} livre(s)` : 'Ma liste (vide)');
 }
 
+function getSheetBook() {
+  if (sheetDetachedBook && typeof sheetDetachedBook === 'object') return sheetDetachedBook;
+  const sheet = $('book-sheet');
+  if (!sheet) return null;
+  const idx = parseInt(sheet.dataset.sheetBookIdx ?? '', 10);
+  if (!Number.isFinite(idx)) return null;
+  return cachedEnrichedBooks[idx] || null;
+}
+
 function patchSheetWishlistButton() {
   const btn = $('sheet-wishlist-btn');
   const sheet = $('book-sheet');
   if (!btn || !sheet || sheet.classList.contains('hidden')) return;
-  const idx = parseInt(sheet.dataset.sheetBookIdx ?? '', 10);
-  const book = Number.isFinite(idx) ? cachedEnrichedBooks[idx] : null;
+  const book = getSheetBook();
   if (!book) return;
   const on = wishlistHasId(enrichedBookStableId(book));
   btn.classList.toggle('is-on', on);
@@ -947,10 +1014,11 @@ async function fetchGoogleBooksByAuthor(authorName, excludeTitle) {
   }
 }
 
-function mergeRecommendations(gItems, olEntries, excludeTitle) {
+function mergeRecommendations(gItems, olEntries, excludeTitle, fallbackAuthor = '') {
   const ex = normTitle(excludeTitle);
   const seen = new Set([ex]);
   const out = [];
+  const olAuthor = String(fallbackAuthor || '').trim();
 
   for (const it of gItems) {
     const vi = it.volumeInfo || {};
@@ -959,6 +1027,7 @@ function mergeRecommendations(gItems, olEntries, excludeTitle) {
     const nt = normTitle(t);
     if (seen.has(nt)) continue;
     seen.add(nt);
+    const authorStr = Array.isArray(vi.authors) ? vi.authors.join(', ') : '';
     const thumb = vi.imageLinks?.thumbnail?.replace('http:', 'https:')
       || vi.imageLinks?.smallThumbnail?.replace('http:', 'https:');
     const meta = formatAuthorTopBookMeta({
@@ -967,7 +1036,7 @@ function mergeRecommendations(gItems, olEntries, excludeTitle) {
       ratingsCount: vi.ratingsCount,
       sourceNote: '',
     });
-    out.push({ title: t, thumb, meta });
+    out.push({ title: t, author: authorStr, thumb, meta });
     if (out.length >= 12) return out;
   }
 
@@ -992,7 +1061,7 @@ function mergeRecommendations(gItems, olEntries, excludeTitle) {
       ratingsCount: null,
       sourceNote: 'Open Library',
     });
-    out.push({ title: t, thumb, meta });
+    out.push({ title: t, author: olAuthor, thumb, meta });
     if (out.length >= 12) break;
   }
   return out;
@@ -1046,11 +1115,16 @@ function renderMoreBooksHtml(items) {
     const meta = typeof it.meta === 'string' && it.meta.trim()
       ? it.meta.trim()
       : 'Sortie — année inconnue';
+    const author = typeof it.author === 'string' ? it.author : '';
+    const label = `Ouvrir la fiche : ${it.title}`;
     return `
-    <div class="sheet-mini-book">
+    <button type="button" class="sheet-mini-book"
+      data-more-title="${esc(it.title)}"
+      data-more-author="${esc(author)}"
+      aria-label="${esc(label)}">
       <div class="sheet-mini-title">${esc(it.title)}</div>
       <div class="sheet-mini-meta">${esc(meta)}</div>
-    </div>`;
+    </button>`;
   }).join('');
   return `<div class="sheet-books-scroll">${slides}</div>`;
 }
@@ -1058,10 +1132,19 @@ function renderMoreBooksHtml(items) {
 function buildIaSimilarCardsForMount(rows, gen) {
   if (gen !== bookSheetLoadGen) return [];
   return rows.slice(0, 8).map(row => {
-    const bits = ['Sortie — année non vérifiée', 'IA'];
+    const y = normalizeYearField(row.annee ?? row.date ?? row.year ?? row.publishedDate ?? '');
+    const style = String(row.style ?? row.genre ?? '').trim();
+    const bits = [];
     if (row.auteur) bits.push(row.auteur);
+    if (y) bits.push(y);
+    if (style) bits.push(style);
     if (row.accroche) bits.push(truncateBlurb(row.accroche, 120));
-    return { title: row.titre, meta: bits.join(' · ') };
+    const meta = bits.length ? bits.join(' · ') : 'Suggestion IA';
+    return {
+      title: row.titre,
+      author: String(row.auteur || '').trim(),
+      meta,
+    };
   });
 }
 
@@ -1161,7 +1244,7 @@ async function hydrateSheetAuthorZones(book, authorName, gen) {
 
     if (gen !== bookSheetLoadGen) return;
 
-    const merged = mergeRecommendations(gItems, olWorks, excludeTitle);
+    const merged = mergeRecommendations(gItems, olWorks, excludeTitle, authorName);
     const m2 = $('sheet-author-mount');
     const b2 = $('sheet-more-books-mount');
     if (!m2 || !b2 || gen !== bookSheetLoadGen) return;
@@ -1303,11 +1386,31 @@ function buildSheetReaderSection(book, llmPending) {
       </div>`
     : '';
 
-  const simRaw = Array.isArray(book.si_similaire) ? book.si_similaire.filter(Boolean) : [];
-  const simBlock = simRaw.length
+  const simPicks = readerSimilarPicksFromBook(book);
+  const simBlock = simPicks.length
     ? `<div class="sheet-similaire">
         <span class="sheet-field-label">Pour prolonger la lecture</span>
-        <ul class="sheet-sim-list">${simRaw.map(s => `<li>${esc(String(s))}</li>`).join('')}</ul>
+        <div class="sheet-sim-list sheet-sim-list--actions" role="list">${simPicks.map(p => {
+    const label = `Ouvrir la fiche : ${p.title}`;
+    const au = p.author?.trim() ? esc(p.author.trim()) : '—';
+    const yr = p.year?.trim() ? esc(p.year.trim()) : '—';
+    const st = p.style?.trim() ? esc(p.style.trim()) : '—';
+    return `<button type="button" class="sheet-sim-open" role="listitem"
+        data-more-title="${esc(p.title)}"
+        data-more-author="${esc(p.author)}"
+        aria-label="${esc(label)}">
+        <span class="sheet-sim-open-title">${esc(p.title)}</span>
+        <span class="sheet-sim-open-facts">
+          <span class="sheet-sim-fact"><span class="sheet-sim-fact-k">Auteur</span> ${au}</span>
+          <span class="sheet-sim-fact"><span class="sheet-sim-fact-k">Parution</span> ${yr}</span>
+          <span class="sheet-sim-fact"><span class="sheet-sim-fact-k">Style</span> ${st}</span>
+        </span>
+        <span class="sheet-sim-open-intrigue">
+          <span class="sheet-sim-fact-k">Intrigue</span>
+          <span class="sheet-sim-open-meta">${esc(p.meta)}</span>
+        </span>
+      </button>`;
+  }).join('')}
       </div>`
     : '';
 
@@ -1411,6 +1514,12 @@ function setSheetLlmBar(gen, mode, detail) {
   }
 }
 
+function writeEnrichedBookAtIndex(book, idx) {
+  if (idx != null && Number.isFinite(idx) && idx >= 0) {
+    cachedEnrichedBooks[idx] = book;
+  }
+}
+
 async function runSheetLlmEnrich(book, idx, gen) {
   setSheetLlmBar(gen, 'busy');
   try {
@@ -1422,12 +1531,12 @@ async function runSheetLlmEnrich(book, idx, gen) {
     } else {
       book._sheetLlmFetched = true;
       setSheetLlmBar(gen, 'error', 'Réponse IA illisible.');
-      cachedEnrichedBooks[idx] = book;
+      writeEnrichedBookAtIndex(book, idx);
       applySheetLlmDomPatch(book, gen);
       await renderSheetMoreBooksCombined(book, gen);
       return;
     }
-    cachedEnrichedBooks[idx] = book;
+    writeEnrichedBookAtIndex(book, idx);
     applySheetLlmDomPatch(book, gen);
     await renderSheetMoreBooksCombined(book, gen);
     setSheetLlmBar(gen, 'done');
@@ -1437,7 +1546,7 @@ async function runSheetLlmEnrich(book, idx, gen) {
   } catch (err) {
     if (gen !== bookSheetLoadGen) return;
     book._sheetLlmFetched = true;
-    cachedEnrichedBooks[idx] = book;
+    writeEnrichedBookAtIndex(book, idx);
     const msg = err?.message || 'Erreur réseau ou quota.';
     setSheetLlmBar(gen, 'error', msg);
     applySheetLlmDomPatch(book, gen);
@@ -1560,11 +1669,61 @@ function renderSheetShell(book, gen, opts = {}) {
   hydrateSheetAuthorZones(book, primaryAuthor(authorRaw), gen);
 }
 
+async function openBookSheetFromSimilarTitle(title, author) {
+  const t = String(title || '').trim();
+  const a = String(author || '').trim();
+  if (!t) return;
+
+  bookSheetLoadGen += 1;
+  const gen = bookSheetLoadGen;
+  sheetDetachedBook = null;
+
+  const info = await fetchCover(t, primaryAuthor(a) || '');
+  if (gen !== bookSheetLoadGen) return;
+
+  const resolvedTitle = String(info?.title || t).trim();
+  let authorsArr = Array.isArray(info?.authors)
+    ? info.authors.map(x => String(x).trim()).filter(Boolean)
+    : [];
+  if (!authorsArr.length && a) {
+    authorsArr = a.split(/[;,]/).map(s => s.trim()).filter(Boolean);
+  }
+  const resolvedAuthor = authorsArr.length ? authorsArr.join(', ') : '';
+
+  const vi = info
+    ? { ...info, title: resolvedTitle || info.title, authors: authorsArr.length ? authorsArr : (info.authors || []) }
+    : { title: resolvedTitle, authors: authorsArr };
+
+  const book = {
+    title: resolvedTitle,
+    author: resolvedAuthor,
+    info: vi,
+    genre: 'Livre',
+    confidence: 'medium',
+    critique: '',
+    _sheetLlmFetched: false,
+  };
+
+  sheetDetachedBook = book;
+  const sheet = $('book-sheet');
+  delete sheet.dataset.sheetBookIdx;
+  sheet.classList.remove('hidden');
+  sheet.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+
+  const llmPending = !!(apiKey && !book._sheetLlmFetched);
+  renderSheetShell(book, gen, { llmPending });
+  const scrollEl = $('book-sheet-scroll');
+  if (scrollEl) scrollEl.scrollTop = 0;
+  if (llmPending) runSheetLlmEnrich(book, null, gen);
+}
+
 function openBookSheet(idx) {
   const book = cachedEnrichedBooks[idx];
   if (!book) return;
   bookSheetLoadGen += 1;
   const gen = bookSheetLoadGen;
+  sheetDetachedBook = null;
   const sheet = $('book-sheet');
   sheet.dataset.sheetBookIdx = String(idx);
   sheet.classList.remove('hidden');
@@ -1583,6 +1742,8 @@ function closeBookSheet() {
   sheet.classList.add('hidden');
   sheet.setAttribute('aria-hidden', 'true');
   document.body.style.overflow = '';
+  delete sheet.dataset.sheetBookIdx;
+  sheetDetachedBook = null;
   const bar = $('sheet-llm-bar');
   if (bar) {
     bar.classList.add('hidden');
@@ -2193,11 +2354,17 @@ document.addEventListener('paste', e => {
 $('book-sheet-backdrop')?.addEventListener('click', closeBookSheet);
 $('book-sheet-close')?.addEventListener('click', closeBookSheet);
 
-$('book-sheet')?.addEventListener('click', e => {
+$('book-sheet')?.addEventListener('click', async e => {
+  const mini = e.target.closest('[data-more-title]');
+  if (mini && mini.closest('#sheet-more-books-mount')) {
+    e.preventDefault();
+    const title = mini.getAttribute('data-more-title') || '';
+    const author = mini.getAttribute('data-more-author') || '';
+    await openBookSheetFromSimilarTitle(title, author);
+    return;
+  }
   if (!e.target.closest('#sheet-wishlist-btn')) return;
-  const sheet = $('book-sheet');
-  const idx = parseInt(sheet?.dataset.sheetBookIdx ?? '', 10);
-  const book = Number.isFinite(idx) ? cachedEnrichedBooks[idx] : null;
+  const book = getSheetBook();
   if (!book) return;
   const r = wishlistToggleFromBook(book);
   if (!r.ok) {

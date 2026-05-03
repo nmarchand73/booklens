@@ -1683,6 +1683,81 @@ header {
 .sheet-sim-list li {
   margin-bottom: 6px;
 }
+.sheet-similaire .sheet-sim-list--actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 0;
+  list-style: none;
+}
+.sheet-sim-open {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--sheet-line);
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+button.sheet-sim-open {
+  appearance: none;
+  font: inherit;
+  color: inherit;
+}
+button.sheet-sim-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.sheet-sim-open:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.28);
+}
+.sheet-sim-open-title {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+.sheet-sim-open-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.7);
+}
+.sheet-sim-fact {
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-sim-fact-k {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.42);
+  margin-right: 4px;
+}
+.sheet-sim-open-intrigue {
+  display: block;
+  margin-top: 8px;
+}
+.sheet-sim-open-intrigue > .sheet-sim-fact-k {
+  display: block;
+  margin-bottom: 4px;
+}
+.sheet-sim-open-meta {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.45;
+}
 
 .sheet-llm-skel-lines {
   display: flex;
@@ -2296,6 +2371,22 @@ header {
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid var(--sheet-line);
   -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+button.sheet-mini-book {
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: block;
+}
+button.sheet-mini-book:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.sheet-mini-book:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.28);
 }
 .sheet-mini-book--sk {
   min-height: 56px;
