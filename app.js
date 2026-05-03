@@ -136,7 +136,7 @@ function applySplitLayout() {
 
   splitRoot.classList.add('split-custom');
   const rootR = splitRoot.getBoundingClientRect();
-  const gh = splitGutter.offsetHeight || 11;
+  const gh = splitGutter.offsetHeight || 40;
   const avail = Math.max(1, rootR.height - gh);
   const minBot = splitMinBottomPx();
   const minTop = splitMinTopPx();
@@ -162,7 +162,7 @@ function initSplitPaneResize() {
     if (activePointer === null || ev.pointerId !== activePointer) return;
     ev.preventDefault();
     const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 11;
+    const gh = splitGutter.offsetHeight || 40;
     const avail = Math.max(1, rootR.height - gh);
     const minTop = splitMinTopPx();
     const minBot = splitMinBottomPx();
@@ -191,7 +191,7 @@ function initSplitPaneResize() {
     window.removeEventListener('pointerup', endDrag);
     window.removeEventListener('pointercancel', endDrag);
     const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 11;
+    const gh = splitGutter.offsetHeight || 40;
     const avail = Math.max(1, rootR.height - gh);
     const bottomPx = resultsPanel.getBoundingClientRect().height;
     persistSplitFracFromPixels(bottomPx, avail);
@@ -219,11 +219,12 @@ function initSplitPaneResize() {
     ev.preventDefault();
     const step = ev.shiftKey ? 32 : 16;
     const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 11;
+    const gh = splitGutter.offsetHeight || 40;
     const avail = Math.max(1, rootR.height - gh);
     const stored = readSplitBottomFrac();
     const curBottom = stored != null ? avail * stored : resultsPanel.getBoundingClientRect().height;
-    const delta = ev.key === 'ArrowUp' ? step : -step;
+    /* Bas = plus d’espace pour les résultats (intuitif clavier / lecteurs d’écran). */
+    const delta = ev.key === 'ArrowDown' ? step : -step;
     const newBottom = clampSplitNum(curBottom + delta, splitMinBottomPx(), avail - splitMinTopPx());
     persistSplitFracFromPixels(newBottom, avail);
     applySplitLayout();
