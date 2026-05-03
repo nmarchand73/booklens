@@ -33,8 +33,13 @@ jobs:
 
       - name: Prepare static bundle
         run: |
+          # Bust browser/CDN cache: same filenames otherwise stay cached across deploys.
+          CACHE_BUST=$(git rev-parse --short HEAD)
           mkdir -p _site
-          cp index.html style.css app.js _site/
+          sed -e "s|href=\"style.css\"|href=\"style.css?v=${CACHE_BUST}\"|g" \
+              -e "s|src=\"app.js\"|src=\"app.js?v=${CACHE_BUST}\"|g" \
+              index.html > _site/index.html
+          cp style.css app.js _site/
           cp -r img _site/
 
       - uses: actions/upload-pages-artifact@v3
