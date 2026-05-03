@@ -247,12 +247,6 @@ header {
   letter-spacing: -0.02em;
   color: var(--text);
 }
-.viewport-empty-hint {
-  font-size: 14px;
-  color: var(--muted);
-  line-height: 1.5;
-  max-width: 260px;
-}
 
 /* Photo analysée + RA : même rectangle (#ar-layer inset 0). */
 #preview {
@@ -483,6 +477,9 @@ header {
   color: var(--text);
   line-height: 1.35;
   margin-bottom: 4px;
+}
+#phase-strip:has(#hint-line[hidden]) #status {
+  margin-bottom: 0;
 }
 .phase-hint {
   font-size: 11px;
@@ -2182,11 +2179,6 @@ button.sheet-sim-open:hover {
   }
   .viewport-empty-title {
     font-size: 15px;
-  }
-  .viewport-empty-hint {
-    font-size: 14px;
-    max-width: none;
-    padding: 0 4px;
   }
 
   .phase-strip {

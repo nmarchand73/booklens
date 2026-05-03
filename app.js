@@ -60,6 +60,8 @@ const fastModeCheck = $('fast-mode-check');
 const saveBtn      = $('save-settings-btn');
 const toggleKeyBtn = $('toggle-key-btn');
 const hintLine     = $('hint-line');
+/** Une seule consigne au démarrage (le titre viewport dit quoi photographier). */
+const STATUS_IDLE_NO_IMAGE = 'Photo, Importer ou fichier — une image, puis Envoyer.';
 const resultsDrawerToggle = $('results-drawer-toggle');
 const resultsPanel = $('results');
 const splitRoot = $('split-root');
@@ -1756,7 +1758,7 @@ async function scan() {
   if (busy) return;
   if (!apiKey) { openSettings(); return; }
   const b64 = captureBase64();
-  if (!b64) { setStatus('Ajoutez une image : appareil photo, photothèque ou fichier'); return; }
+  if (!b64) { setStatus('Choisissez une image (Photo ou Importer).'); return; }
 
   busy = true;
   scanBtn.disabled = true;
@@ -2222,8 +2224,8 @@ function resetPhotoState() {
   syncMainControlLabel();
   hideOverlay();
   clearArLayer();
-  setStatus('Ajoutez une image du rayon');
-  setHint('Appareil photo · photothèque ou fichier — une image à la fois.');
+  setStatus(STATUS_IDLE_NO_IMAGE);
+  setHint('');
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -2258,7 +2260,16 @@ function setStatus(t) {
 }
 
 function setHint(t) {
-  if (hintLine) hintLine.textContent = t;
+  if (!hintLine) return;
+  const s = String(t ?? '').trim();
+  hintLine.textContent = s;
+  if (s) {
+    hintLine.hidden = false;
+    hintLine.removeAttribute('aria-hidden');
+  } else {
+    hintLine.hidden = true;
+    hintLine.setAttribute('aria-hidden', 'true');
+  }
 }
 
 function esc(s) {
@@ -2293,8 +2304,8 @@ clearBtn.addEventListener('click', () => {
   cachedEnrichedBooks = [];
   closeBookSheet();
   showEmpty('Envoyez une photo de rayon pour découvrir les critiques');
-  setStatus('Résultats effacés');
-  setHint('Appareil photo · photothèque ou fichier — une image à la fois.');
+  setStatus('Résultats effacés — Photo ou Importer pour recommencer.');
+  setHint('');
 });
 settingsBtn.addEventListener('click', openSettings);
 backdrop.addEventListener('click', closeSettings);
@@ -2312,7 +2323,7 @@ saveBtn.addEventListener('click', () => {
   localStorage.setItem('bl_fast',     fastMode ? '1' : '0');
   closeSettings();
   setStatus('Paramètres enregistrés');
-  setHint(uploadedImg ? 'Touchez Envoyer pour analyser cette image.' : 'Photo avec le bouton central, ou image depuis Importer (photothèque / fichier).');
+  setHint(uploadedImg ? 'Touchez Envoyer pour analyser cette image.' : '');
 });
 
 vp.addEventListener('dragover', e => { e.preventDefault(); vp.style.outline = '2px dashed var(--accent)'; });
