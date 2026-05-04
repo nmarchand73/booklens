@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#000000">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@9..144,500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@9..144,500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
   <link rel="preconnect" href="https://api.anthropic.com" crossorigin>
   <link rel="dns-prefetch" href="https://www.googleapis.com">
   <link rel="dns-prefetch" href="https://openlibrary.org">
@@ -52,7 +52,14 @@
 
 <div id="app">
   <header>
-    <span class="logo">📚 BookLens</span>
+    <span class="logo">
+      <svg class="logo-icon" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <path fill="#34d399" d="M4 22V8l8-2v16l-8 2z" opacity=".95"/>
+        <path fill="#f472b6" d="M10 24V9l8-2v16.5l-8 2.5z" opacity=".92"/>
+        <path fill="#7dd3fc" d="M16 26V10l8-2v17l-8 2z" opacity=".95"/>
+      </svg>
+      <span class="logo-wordmark">BookLens</span>
+    </span>
     <div class="header-actions">
       <button type="button" id="wishlist-btn" class="icon-btn wishlist-header-btn" title="Ma liste" aria-label="Ma liste">
         <span class="wishlist-header-ico" aria-hidden="true">♥</span>
@@ -67,7 +74,20 @@
   <div id="viewport">
     <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
       <div class="viewport-empty-inner">
-        <span class="viewport-empty-ico" aria-hidden="true">📷</span>
+        <span class="viewport-empty-ico" aria-hidden="true">
+          <svg class="viewport-empty-ico-svg" width="52" height="52" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="brand-empty-grad" x1="6" y1="42" x2="42" y2="8" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#5eead4"/>
+                <stop offset="0.33" stop-color="#7dd3fc"/>
+                <stop offset="0.66" stop-color="#fcd34d"/>
+                <stop offset="1" stop-color="#fb7185"/>
+              </linearGradient>
+            </defs>
+            <path d="M10 18h5.5l2.6-3.4h11.8l2.6 3.4H38a3 3 0 013 3v16a3 3 0 01-3 3H10a3 3 0 01-3-3V21a3 3 0 013-3z" stroke="url(#brand-empty-grad)" stroke-width="2.2" stroke-linejoin="round"/>
+            <circle cx="24" cy="27" r="6.5" stroke="url(#brand-empty-grad)" stroke-width="2.2"/>
+          </svg>
+        </span>
         <p class="viewport-empty-kicker">Appareil photo ou import</p>
         <h2 class="viewport-empty-title">
           <span class="viewport-empty-line1">Couverture du livre</span>

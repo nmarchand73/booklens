@@ -39,6 +39,22 @@
   --overlay-raised-hover: color-mix(in srgb, var(--surface) 94%, transparent);
   --btn-ghost-hover: color-mix(in srgb, var(--mood-mint) 12%, var(--surf3));
   --btn-ghost-active: color-mix(in srgb, var(--mood-mint) 22%, var(--surf2));
+  /* Marque BookLens : même langage que le header (titres, hero vide). */
+  --brand-gradient: linear-gradient(
+    115deg,
+    var(--mood-mint) 0%,
+    var(--mood-sky) 26%,
+    var(--mood-gold) 52%,
+    var(--mood-coral) 78%,
+    var(--accent) 100%
+  );
+  --brand-gradient-soft: linear-gradient(
+    105deg,
+    var(--mood-sky) 0%,
+    var(--mood-gold) 45%,
+    var(--mood-lavender) 72%,
+    var(--mood-coral) 100%
+  );
 }
 
 html {
@@ -145,12 +161,48 @@ header {
   flex-shrink: 0;
 }
 .logo {
-  font-family: var(--sheet-display);
-  font-size: 18px;
-  font-weight: 700;
-  font-variation-settings: 'opsz' 72;
-  letter-spacing: -0.02em;
-  font-style: italic;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+.logo-icon {
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 8px rgba(94, 234, 212, 0.25));
+}
+.logo-wordmark {
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-style: normal;
+  text-transform: none;
+  background-image: var(--brand-gradient);
+  background-size: 160% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: none;
+  filter: drop-shadow(0 0 20px rgba(249, 115, 22, 0.12));
+  transition: background-position 0.85s ease, filter 0.35s ease;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .logo:hover .logo-wordmark {
+    background-position: 100% 50%;
+    filter: drop-shadow(0 0 24px rgba(94, 234, 212, 0.22));
+  }
+  .logo:hover .logo-icon {
+    filter: drop-shadow(0 2px 12px rgba(125, 211, 252, 0.35));
+  }
+}
+@supports not (background-clip: text) {
+  .logo-wordmark {
+    color: var(--text);
+    background: none;
+    filter: none;
+  }
 }
 
 .header-actions {
@@ -295,11 +347,11 @@ header {
   font-variant-numeric: tabular-nums;
 }
 
-/* Pendant l’analyse : durée partagée avec le balayage ; pixellisation sur canvas (JS). */
+/* Pendant l’analyse : durée partagée avec le balayage ; dither sur canvas (JS). */
 #viewport.scanning {
   cursor: wait;
   /* Même durée que SCAN_PIXEL_MS dans app.js */
-  --scan-sweep-duration: 6.8s;
+  --scan-sweep-duration: 12s;
   --scan-line-ease: cubic-bezier(0.48, 0.08, 0.18, 1);
   /* Zone du pseudo-élément : fine ligne au centre + halo vertical (pas une grosse bande). */
   --scan-line-zone-h: 52px;
@@ -331,7 +383,7 @@ header {
   }
 }
 
-/* Couche plein cadre : image pixellisée (rafraîchie en JS), même grade N&B que la photo. */
+/* Couche plein cadre : trame void-and-cluster + downscale, zoom léger JS synchrone, rafraîchie en rAF. */
 #scan-pixel-layer {
   position: absolute;
   inset: 0;
@@ -342,8 +394,8 @@ header {
   pointer-events: none;
   opacity: 0;
   transform-origin: center center;
-  image-rendering: crisp-edges;
-  filter: grayscale(1) contrast(1.1) brightness(0.96);
+  image-rendering: pixelated;
+  filter: contrast(1.08) brightness(0.98);
   /* Même logique que #preview : image entière, pas d’étirement/crop du bitmap. */
   object-fit: contain;
   object-position: center center;
@@ -486,62 +538,100 @@ header {
   padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   text-align: center;
   background:
-    radial-gradient(ellipse 85% 55% at 18% 12%, rgba(94, 234, 212, 0.12) 0%, transparent 52%),
-    radial-gradient(ellipse 70% 50% at 88% 22%, rgba(252, 211, 77, 0.1) 0%, transparent 48%),
-    linear-gradient(165deg, #0f0f0f 0%, var(--bg) 100%);
+    radial-gradient(ellipse 90% 58% at 14% 10%, rgba(94, 234, 212, 0.16) 0%, transparent 55%),
+    radial-gradient(ellipse 75% 52% at 86% 18%, rgba(252, 211, 77, 0.14) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 45% at 50% 88%, rgba(251, 113, 133, 0.08) 0%, transparent 45%),
+    linear-gradient(168deg, #0c0c0c 0%, var(--bg) 55%, #080808 100%);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .viewport-empty:active {
-  filter: brightness(1.06);
+  filter: brightness(1.05);
 }
 .viewport-empty-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  max-width: 17rem;
+  gap: 14px;
+  max-width: 18rem;
   margin-top: -4vh;
 }
 .viewport-empty-ico {
-  font-size: 40px;
-  line-height: 1;
-  opacity: 0.88;
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.viewport-empty-ico-svg {
+  display: block;
+  filter: drop-shadow(0 4px 20px rgba(94, 234, 212, 0.22)) drop-shadow(0 2px 12px rgba(251, 113, 133, 0.15));
 }
 .viewport-empty-kicker {
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--muted);
   margin: 0;
-  line-height: 1.2;
+  line-height: 1.25;
+  background-image: var(--brand-gradient-soft);
+  background-size: 140% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .viewport-empty-title {
   margin: 0;
   font-weight: inherit;
-  line-height: 1.22;
+  line-height: 1.18;
 }
 .viewport-empty-line1 {
   display: block;
-  font-family: var(--sheet-display);
-  font-size: clamp(1.2rem, 4.2vw, 1.45rem);
-  font-weight: 700;
-  font-variation-settings: 'opsz' 72;
-  font-style: italic;
-  letter-spacing: -0.03em;
-  color: var(--text);
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
+  font-size: clamp(1.35rem, 5vw, 1.85rem);
+  font-weight: 800;
+  font-style: normal;
+  letter-spacing: -0.045em;
+  background-image: var(--brand-gradient);
+  background-size: 155% 100%;
+  background-position: 12% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 28px rgba(249, 115, 22, 0.1));
 }
 .viewport-empty-line2 {
   display: block;
-  margin-top: 8px;
-  font-family: var(--shell-ui);
-  font-size: clamp(0.9rem, 3.2vw, 1.05rem);
+  margin-top: 10px;
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
+  font-size: clamp(0.95rem, 3.4vw, 1.12rem);
   font-weight: 600;
   font-style: normal;
-  letter-spacing: 0.01em;
-  color: var(--muted);
+  letter-spacing: -0.02em;
+  background-image: var(--brand-gradient-soft);
+  background-size: 130% 100%;
+  background-position: 40% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  opacity: 0.95;
+}
+@supports not (background-clip: text) {
+  .viewport-empty-kicker {
+    color: var(--muted);
+    background: none;
+  }
+  .viewport-empty-line1 {
+    color: var(--text);
+    background: none;
+    filter: none;
+  }
+  .viewport-empty-line2 {
+    color: var(--muted);
+    background: none;
+    opacity: 1;
+  }
 }
 
 /* Barre haute sur la photo : « Autre photo » lisible, sans flotter au milieu du cadrage. */
@@ -765,9 +855,10 @@ header {
   min-width: 72px;
 }
 .main-caption {
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
   color: var(--muted);
 }
 .side-btn {
@@ -821,7 +912,12 @@ header {
   width: 24px;
   height: 24px;
 }
-.btn-label { font-size: 11px; font-weight: 700; }
+.btn-label {
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
 .btn-sublabel {
   display: block;
   font-size: 9px;
@@ -908,12 +1004,14 @@ header {
   padding: var(--space-3) var(--space-4);
   text-align: center;
   font-family: var(--shell-ui);
-  background: var(--surf2);
-  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surf2) 94%, var(--mood-mint) 6%) 0%, var(--surf2) 100%);
+  border-top: 1px solid color-mix(in srgb, var(--border) 85%, var(--mood-mint) 15%);
 }
 #status {
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
   font-size: 14px;
   font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--text);
   line-height: 1.35;
   margin-bottom: 4px;
@@ -2670,8 +2768,12 @@ button.sheet-sim-open:hover {
     padding-top: max(6px, env(safe-area-inset-top));
     min-height: 0;
   }
-  .logo {
-    font-size: 16px;
+  .logo-wordmark {
+    font-size: 17px;
+  }
+  .logo-icon {
+    width: 24px;
+    height: 24px;
   }
   .icon-btn {
     padding: 8px 10px;
@@ -2692,8 +2794,9 @@ button.sheet-sim-open:hover {
     max-width: 15rem;
     margin-top: -2vh;
   }
-  .viewport-empty-ico {
-    font-size: 32px;
+  .viewport-empty-ico-svg {
+    width: 44px;
+    height: 44px;
   }
   .viewport-empty-kicker {
     font-size: 10px;
