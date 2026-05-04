@@ -444,33 +444,16 @@ function captureBase64() {
 /** Durée d’un cycle d’effet scan (alignée sur `--scan-sweep-duration` en CSS). */
 const SCAN_PIXEL_MS = 12000;
 
-/**
- * Trame void-and-cluster 32×32 (rangs 0..1023) — R. Ulichney,
- * « The void-and-cluster method for dither array generation », SPIE 1993
- * (design/1993-void-cluster.pdf). Génération : scripts/dump-void-cluster-b64.mjs
- * (logique GetVoidAndClusterBlueNoise, C. Peters / BlueNoise.py, CC0).
- */
-const VOID_CLUSTER_DIM = 32;
-const VOID_CLUSTER_AREA = VOID_CLUSTER_DIM * VOID_CLUSTER_DIM;
-const VOID_CLUSTER_RANK_B64 =
-  '6gF8A3wAGgFvAnQDgAEBAdoBwwJeAIMChgE0A8oAmwEbAJYCewDzAkAB8AO5AQ8CBgCEAjoD1wAwAMgDjQGmAD0AvgI4AtIDtAG/ABACsAOYAA4DsAFaAwkAYgLmAWgDPAG9A+oASwMkANgC/QCvAsIDlADZAc4CXgEgAvACOQP4A4cB0QAYAzoAmALpAiMAVgL3AyoBHgKsAwMB0wJmABsDCAKOAV4C4gGBA28BvQBMAzMBUgKnA4AAmgLhAD0BbAJqAE0DAgJgAZsDNgFJA3oB3wBEAKQCowBuAdMDOQK2AL0COQCmA54AgQJKAAADMAKQATYALAOzAZEDGQAFArYBogMhAa0CpwA8AmMAzwG1AgsClwM/A98B+wI8ALUBGAH5A2UB+QIiAaoB4gPuAXgAtwOVAssAJgFHAl8D3gL2APwCTQDFAe8DCQMKAckDqwD4Al0BaABxAtAAeQOhAjwDSgKCAPcBWwPUAMQCSgFyAw0B6AIDAsQDZAB0AaUAfwJpAUQCWAMRAIsBdwJpAyAAWwL1AMEBqAM4AR0CcgELAN4AkwOiAkMAUAIzAwwAQQKvAJoBJwAXA6UC5AHkAyIDhgCxA+AABgLXAskAFQKgATUD6QPSAi0AIQOOALwD6AHmApQB/gDVA7cBmQB+AbcCJgP2A2MCWAHsAFMDCAAKAq4BwQIwATEDcgBOAbYDVQApAZIA/QFkAUgCwgIMAU8DZQJYACsCBgMyAWsDvgMBAiABZwDcAXgDgwBCAkUBxgCSAysAfALgA9IBTgOgAgQDLgKTAlwD2wDZA0YAxgG0AO0DVgF1Ax0A7wF4AukAMgCJApgD0gDyAqIBsALQA+ECKAKCAZcAPwLwABgAdwG8ALEBlQMFAJIBQQN+Aj8BDANsALIBlwLPANwCcwATA8IBRQNwARoCIQCtAwQBRQBIAxEBbgMQA0kB3QKGA2oC+gN2AAIBywLxAYgAJQKfA6sC9QEnAxABygOTASMCVAHoA5EAzwJpAjoBKgN7AtMBqgCbAlEAqwGyA1oA3QEdARMCMAN0As0DNQH/AusAhQEPAMMAkAM3AlIANgOdA7sAPgIZAUsAxgO5APsBXABhATsCmgPwAdMAMgKxArEADQMsAFwBzgFAAEUCbQNUAOEDWALlAk8BiwB9AiwBFgCpAnYD9gLRATsDfwGDA+wC5QMoARIA2gLUAyUBUgOJAa4DpwJ/A9YARgOwAKcBugLYAQkBYQOlAfsD4wH9ApkB8gFZAGsB3QCUAgQARgKQAKgBiwItA3MBhQBuAh4ACQL8AIwANALWAnsBjgK7Az4BKwN/ABECRwCjArIAigPuANwDXQJXAxYC/AMfAcwC8QBeA9cBxwAZAncDuwH0At0DigLEATcB7ANuABQCHADIAGcCxQPUAvcAPQNsATMCcQDnAh4BogA/AAgDkQHzAcADNwAWAfMDWwDGAvQArABjAV0AjQMKABwD7QBzA/UC9gFfAS8AjwGCA1MCBwAaA8ABgAJ2AbMDcALEAJYDXwBkAvoCNQJUA5ECSwGlAxYDJgJCA8kC7AFfAooBrAIUAa8DNwOQAroA4QEtAdED3ACkAy4ALgMAAqMBsgJDATIDtwBmAX4AnAETAOsBTAI0AKEBCwGTAFEBqQOhANsBTwCtAY0AGwLxA/cChACzAv4BSAHIAoEA5wBgAxQALwK4AYgDvwLHAwEDBgHaA6AAcAOqAvQDSwJRAzUABQPmA2gCagP7AMUCTAFMAFkDlQFXAq0ASgMtAs4DKwHVAusD+AAqAPkBwQBtAkMDiAHiAkYB5ABOAL8BngIjASEC2QBTAe4CDQCgA8kBegLyAMMDOACJA80BZwGSAmIA5QGbACQDhwI0AcsBOwAnAmsAeQLVAR4DFwKFA8IAlgHAAlYDfQAHAoMBVAKfAEADHwJBAQMDnAIIASYAGQOYAXoDUQJ9AbkD6gJvA1IBqwPYAGIDAwDMA2IBegARA9gDFwDIAYgCjAMjAw4B3gMoAN8CtQCfAXkA4wNhAqMDzgDxAhsBUAAYAokAggILA+ABvAInATECuADHAnYCFQFAAq4AtQMuAUIAxQC6AbsCbQHnAaEDPQI+A/wBnQBCAQwCAgCoAo8D4wCdARUAAAGaAP0DlwECA3sDpgEpAJQD0AHrAngBygIsAqoDcgJgAGcD7wCFAg4AMQHbAr4BZQOGAv4DWQEdA0MC2wPNAkQDTwIxAJkCcADzAPoBKANbAWkAYwPmAO0BigDvAiQBDQIVA48A9QOEAYQD6ABBAAcDdQCvAagA1gFXAC8B/wGpAVoBjgMSAnkBvwNcApYA3wMOAmsCIgD/A0cDjAEBAM8DUAHKAeQCbQBVArYC1gNxAQUBOgLgAl0DcwKAA3QAywPVAA8DEgFVAz4A4wI7AaYC/wAUA2gBnwL6AFkCfQPMAIwCNgIHATgDBAKkANQBdQIlA7gDJQD5AHwBwAAqArkCSQBgApwAtALDAdoAmQOkAVMAfgOpAL0BSAAvA94B0AJWAMEDHwCeAbQDRwEzAIcDvgBXAfQBrgLnAwoDOQFQA8wBugP4AUQB7gMpAhoAKQNJAukB2QKeAyQCTQGVABMBIANqAWQDnQLiABID0QIiAmEAZgJmA4cAxwEQAI0C5QB1Ae0CAAAfA3cAjwJsA1UBzQDXAxwBbwC4AuoDTQKLA7wBHAKzAE4CZQBxA4EBFwHyA6wB/gIPAVoCnAM=';
-
-let __voidClusterRanks = null;
-function getVoidClusterRanks() {
-  if (!__voidClusterRanks) {
-    const bin = atob(VOID_CLUSTER_RANK_B64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    __voidClusterRanks = new Uint16Array(bytes.buffer);
-  }
-  return __voidClusterRanks;
-}
-
+/** Halftone façon CodePen (sabosugi / Dither ASCII) : grille à points, taille de cellule qui monte sur le cycle. */
+const HALFTONE_BG = '#101014';
+const HALFTONE_CONTRAST = 18;
 
 let scanPixelRaf = 0;
 let scanPixelLoopStart = 0;
-/** Tampon downscale → dither → upscale. */
+/** Tampon final (photo lissie + halftone en fondu). */
 let __scanPixelBuf = null;
+/** Tampon intermédiaire : halftone seul (fond + points), composité avec alpha sur la photo. */
+let __scanHalfBuf = null;
 
 function cancelScanPixelAnim() {
   if (scanPixelRaf) {
@@ -479,7 +462,7 @@ function cancelScanPixelAnim() {
   }
 }
 
-/** Masque la couche dither utilisée pendant l’effet scan. */
+/** Masque la couche halftone utilisée pendant l’effet scan. */
 function clearScanPixelLayer() {
   cancelScanPixelAnim();
   scanMicroZoom = 1;
@@ -494,67 +477,108 @@ function clearScanPixelLayer() {
   }
 }
 
-/** Luminance perceptuelle rapide 0–255 (sRGB). */
-function scanLumaByte(r, g, b) {
-  return (77 * r + 150 * g + 29 * b) >> 8;
-}
-
 /**
- * Downscale puis trame void-and-cluster 32×32 (ordered dither « blue noise »),
- * puis upscale sur destCanvas. Ulichney 1993 + rendu Surma / ditherpunk.
+ * Halftone coloré (CodePen sabosugi / Dither ASCII) + fondu depuis la photo d’origine :
+ * on commence sur l’image downscalée lisse (smoothing), puis on cross-fade vers le halftone ;
+ * la maille (step) grandit en douceur sur le cycle.
  */
-function drawDitherTransitionOnto(srcCanvas, destCanvas, block, elapsedMs) {
+function drawHalftoneTransitionOnto(srcCanvas, destCanvas, elapsedMs) {
   const sw = srcCanvas.width;
   const sh = srcCanvas.height;
   const dw = destCanvas.width;
   const dh = destCanvas.height;
-  const b = Math.max(1, Math.min(Math.floor(block), Math.max(sw, sh)));
-  const cw = Math.max(1, Math.ceil(sw / b));
-  const ch = Math.max(1, Math.ceil(sh / b));
+  const p = (elapsedMs % SCAN_PIXEL_MS) / SCAN_PIXEL_MS;
+  const tEase = (1 - Math.cos(Math.PI * p)) / 2;
+  /**
+   * Courbe > 1 : l’image nette reste dominante au début (fondu progressif vers le halftone).
+   */
+  const mixHalftone = Math.pow(tEase, fastMode ? 1.25 : 1.45);
+  /** Maille qui grandit un peu plus tard que le temps brut (évite pixel blot trop tôt). */
+  const stepT = Math.pow(tEase, 0.82);
+  const stepMin = 3;
+  const stepMax = fastMode ? 10 : 15;
+  const step = Math.max(2, Math.round(stepMin + stepT * (stepMax - stepMin)));
+
+  const maxEdge = fastMode ? 320 : 440;
+  const scale0 = Math.min(1, maxEdge / Math.max(sw, sh));
+  const cw = Math.max(1, Math.round(sw * scale0));
+  const ch = Math.max(1, Math.round(sh * scale0));
+
   if (!__scanPixelBuf) __scanPixelBuf = document.createElement('canvas');
   __scanPixelBuf.width = cw;
   __scanPixelBuf.height = ch;
   const sctx = __scanPixelBuf.getContext('2d', { willReadFrequently: true });
-  sctx.imageSmoothingEnabled = false;
+  sctx.imageSmoothingEnabled = true;
   sctx.clearRect(0, 0, cw, ch);
+  /** Couche 1 : reproduction lisse de la capture (point de départ « image originale »). */
   sctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, cw, ch);
 
   const id = sctx.getImageData(0, 0, cw, ch);
   const px = id.data;
-  const p = (elapsedMs % SCAN_PIXEL_MS) / SCAN_PIXEL_MS;
-  const tEase = (1 - Math.cos(Math.PI * p)) / 2;
-  /** 0 = photo en niveaux de gris lisses → 1 = trame 1 bit complète */
-  const mixDither = Math.pow(tEase, 1.35);
-  const ranks = getVoidClusterRanks();
-  /** Défilement lent de la période 32×32 (void-cluster). */
-  const crawlRow = (elapsedMs >> 10) % VOID_CLUSTER_DIM;
-  const crawlCol = ((elapsedMs >> 10) * 17 + (elapsedMs >> 12)) % VOID_CLUSTER_DIM;
-
-  for (let y = 0; y < ch; y++) {
-    const row = y * cw * 4;
-    const ry = (y + crawlRow) % VOID_CLUSTER_DIM;
-    for (let x = 0; x < cw; x++) {
-      const i = row + x * 4;
-      const r = px[i];
-      const g = px[i + 1];
-      const bl = px[i + 2];
-      const L = scanLumaByte(r, g, bl) / 255;
-      const rx = (x + crawlCol) % VOID_CLUSTER_DIM;
-      const th = (ranks[ry * VOID_CLUSTER_DIM + rx] + 0.5) / VOID_CLUSTER_AREA;
-      const bit = L >= th ? 1 : 0;
-      const out = mixDither * bit + (1 - mixDither) * L;
-      const v = out <= 0 ? 0 : out >= 1 ? 255 : Math.round(out * 255);
-      px[i] = v;
-      px[i + 1] = v;
-      px[i + 2] = v;
-      px[i + 3] = 255;
-    }
-  }
-  sctx.putImageData(id, 0, 0);
 
   const dctx = destCanvas.getContext('2d');
   dctx.imageSmoothingEnabled = false;
   dctx.clearRect(0, 0, dw, dh);
+
+  if (mixHalftone < 0.004) {
+    dctx.drawImage(__scanPixelBuf, 0, 0, cw, ch, 0, 0, dw, dh);
+    return;
+  }
+
+  if (!__scanHalfBuf) __scanHalfBuf = document.createElement('canvas');
+  __scanHalfBuf.width = cw;
+  __scanHalfBuf.height = ch;
+  const halfCtx = __scanHalfBuf.getContext('2d', { willReadFrequently: true });
+
+  halfCtx.fillStyle = HALFTONE_BG;
+  halfCtx.fillRect(0, 0, cw, ch);
+
+  const gap = Math.max(0, Math.min(2, Math.floor(step * 0.1)));
+  const inner = Math.max(1, step - gap);
+  const halftoneMul = 1.5;
+  const contrast = HALFTONE_CONTRAST;
+  const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
+  for (let y = 0; y < ch; y += step) {
+    for (let x = 0; x < cw; x += step) {
+      const cx = Math.min(cw - 1, x + (step >> 1));
+      const cy = Math.min(ch - 1, y + (step >> 1));
+      const i = (cy * cw + cx) << 2;
+      let r = px[i];
+      let g = px[i + 1];
+      let b = px[i + 2];
+      const a = px[i + 3];
+      if (a < 15) continue;
+
+      r = contrastFactor * (r - 128) + 128;
+      g = contrastFactor * (g - 128) + 128;
+      b = contrastFactor * (b - 128) + 128;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+
+      const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      const sc = luma * halftoneMul;
+
+      const pxCenter = x + step / 2;
+      const pyCenter = y + step / 2;
+
+      halfCtx.save();
+      halfCtx.translate(pxCenter, pyCenter);
+      halfCtx.scale(sc, sc);
+      halfCtx.fillStyle = `rgba(${r | 0},${g | 0},${b | 0},${a / 255})`;
+      halfCtx.beginPath();
+      halfCtx.arc(0, 0, inner / 2, 0, Math.PI * 2);
+      halfCtx.fill();
+      halfCtx.restore();
+    }
+  }
+
+  /** Couche 2 : halftone par-dessus avec alpha = mixHalftone → blend linéaire photo → halftone. */
+  sctx.globalAlpha = mixHalftone;
+  sctx.drawImage(__scanHalfBuf, 0, 0);
+  sctx.globalAlpha = 1;
+
   dctx.drawImage(__scanPixelBuf, 0, 0, cw, ch, 0, 0, dw, dh);
 }
 
@@ -580,15 +604,11 @@ function scanPixelTick(now) {
   scanMicroZoom = 1 + SCAN_ZOOM_MAX_DELTA * t;
   applyPhotoZoom();
   scanPixelLayer.style.transform = `scale(${scanMicroZoom})`;
-  /* Puissance > 1 : longtemps quasi net ; maxB bas = jamais de gros blocs (trame fine). */
-  const tBlock = Math.pow(t, 2.2);
-  const maxB = fastMode ? 4 : 5;
-  const block = 1 + tBlock * (maxB - 1);
-  drawDitherTransitionOnto(canvas, scanPixelLayer, block, elapsed);
+  drawHalftoneTransitionOnto(canvas, scanPixelLayer, elapsed);
   scanPixelRaf = requestAnimationFrame(scanPixelTick);
 }
 
-/** Affiche #scan-pixel-layer et anime la trame dither à partir du canvas de capture. */
+/** Affiche #scan-pixel-layer et anime le halftone à partir du canvas de capture. */
 function refreshScanPixelLayer() {
   if (!scanPixelLayer || !canvas?.width || !canvas?.height) return;
   if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) {
