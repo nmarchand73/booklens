@@ -21,6 +21,12 @@ let lastBooksForAr = [];
 let lastEnrichedForAr = [];
 /** Dernière liste enrichie affichée — index → fiche détail. */
 let cachedEnrichedBooks = [];
+/** Résultats de l’écran recherche (Google Books). */
+let cachedSearchBooks = [];
+const SEARCH_RECENT_KEY = 'bl_search_recent_json';
+const SEARCH_RECENT_MAX = 8;
+let searchDebounceTimer = null;
+let searchUiRequestGen = 0;
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
 /** Fiche ouverte depuis une suggestion (hors liste de scan). */
@@ -121,6 +127,16 @@ const resultsLabel = $('results-label');
 const clearBtn     = $('clear-btn');
 const wishlistBtn = $('wishlist-btn');
 const dockHistoryBtn = $('dock-history-btn');
+const dockSearchBtn = $('dock-search-btn');
+const screenScan = $('screen-scan');
+const screenSearch = $('screen-search');
+const bookSearchInput = $('book-search-input');
+const searchClearBtn = $('search-clear-btn');
+const searchSubmitBtn = $('search-submit-btn');
+const searchEmpty = $('search-empty');
+const searchRecent = $('search-recent');
+const searchHint = $('search-hint');
+const searchResultsList = $('search-results-list');
 const wishlistBadge = $('wishlist-badge');
 const wishlistModal = $('wishlist-modal');
 const wishlistBackdrop = $('wishlist-modal-backdrop');
@@ -158,6 +174,7 @@ let appDockTab = 'scan';
 function setAppDockTab(tab) {
   appDockTab = tab;
   dockHistoryBtn?.classList.toggle('is-active', tab === 'history');
+  dockSearchBtn?.classList.toggle('is-active', tab === 'search');
   wishlistBtn?.classList.toggle('is-active', tab === 'bookmark');
   settingsBtn?.classList.toggle('is-active', tab === 'settings');
   scanBtn?.classList.toggle('is-active', tab === 'scan');
@@ -167,12 +184,41 @@ function setAppDockTab(tab) {
     else el.removeAttribute('aria-current');
   };
   setCur(dockHistoryBtn, tab === 'history');
+  setCur(dockSearchBtn, tab === 'search');
   setCur(wishlistBtn, tab === 'bookmark');
   setCur(settingsBtn, tab === 'settings');
   setCur(scanBtn, tab === 'scan');
 }
 
+function isSearchScreenActive() {
+  return !!(screenSearch && !screenSearch.classList.contains('hidden'));
+}
+
+function showScanScreen() {
+  screenScan?.classList.remove('hidden');
+  screenSearch?.classList.add('hidden');
+  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'true');
+  splitRoot?.classList.remove('split-root--search');
+  applySplitLayout();
+  scheduleArReflow();
+}
+
+function openSearchScreen() {
+  closeSettings();
+  closeWishlistModal();
+  screenScan?.classList.add('hidden');
+  screenSearch?.classList.remove('hidden');
+  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'false');
+  splitRoot?.classList.add('split-root--search');
+  setAppDockTab('search');
+  applySplitLayout();
+  renderSearchRecentPanel();
+  updateSearchChrome();
+  bookSearchInput?.focus({ preventScroll: true });
+}
+
 function openHistoryFromDock() {
+  showScanScreen();
   closeSettings();
   closeWishlistModal();
   expandResultsDrawer();
@@ -292,6 +338,16 @@ function persistSplitFracFromPixels(bottomPx, avail) {
 
 function applySplitLayout() {
   if (!splitRoot || !splitTop || !resultsPanel || !splitGutter) return;
+
+  if (splitRoot.classList.contains('split-root--search')) {
+    splitTop.style.flex = '';
+    splitTop.style.height = '';
+    resultsPanel.style.flex = '';
+    resultsPanel.style.height = '';
+    splitRoot.classList.remove('split-custom');
+    splitGutter.removeAttribute('aria-valuenow');
+    return;
+  }
 
   const collapsed = resultsPanel.classList.contains('collapsed');
   splitRoot.classList.toggle('split-gutter--disabled', collapsed);
@@ -1094,6 +1150,17 @@ async function fetchCover(title, author) {
   } catch { return null; }
 }
 
+async function fetchBooksSearch(query) {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const qenc = encodeURIComponent(q);
+  const url = `${GBOOKS_URL}?q=${qenc}&maxResults=20&fields=items(id,volumeInfo(title,subtitle,authors,imageLinks,pageCount,publishedDate,averageRating,ratingsCount,categories,description,publisher,language,industryIdentifiers))`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Le catalogue est indisponible pour le moment.');
+  const d = await r.json();
+  return Array.isArray(d.items) ? d.items : [];
+}
+
 // ── Fiche auteur : Wikipédia en tête (extrait + lien) ; Open Library en complément (dates, portrait si pas d’image wiki) ──
 function normTitle(t) {
   try {
@@ -1118,6 +1185,33 @@ function stripHtml(html) {
   const d = document.createElement('div');
   d.innerHTML = String(html || '');
   return (d.textContent || d.innerText || '').trim();
+}
+
+function genreLabelFromCategories(categories) {
+  if (!Array.isArray(categories) || !categories.length) return 'Livre';
+  const raw = String(categories[0] || '').trim();
+  if (!raw) return 'Livre';
+  const leaf = raw.split('/').pop().trim();
+  return leaf || 'Livre';
+}
+
+function googleVolumeToBook(vol) {
+  const vi = vol.volumeInfo || {};
+  const authors = Array.isArray(vi.authors) ? vi.authors.map(x => String(x).trim()).filter(Boolean) : [];
+  const title = String(vi.title || '').trim() || 'Sans titre';
+  const author = authors.length ? authors.join(', ') : 'Auteur inconnu';
+  const desc = stripHtml(vi.description || '');
+  const teaser = desc.length > 240 ? `${desc.slice(0, 237)}…` : desc;
+  const genre = genreLabelFromCategories(vi.categories);
+  return {
+    title,
+    author,
+    info: vi,
+    genre,
+    confidence: 'catalogue',
+    critique: teaser,
+    _sheetLlmFetched: false,
+  };
 }
 
 function normalizeOlBio(bio) {
@@ -1322,10 +1416,14 @@ function refreshWishlistDependentUi() {
     renderCards(cachedEnrichedBooks);
     patchArMarkersWithCovers(cachedEnrichedBooks);
   }
+  if (cachedSearchBooks?.length && searchResultsList) {
+    renderSearchResultCards(cachedSearchBooks);
+  }
 }
 
 function openWishlistModal() {
   if (!wishlistModal) return;
+  showScanScreen();
   renderWishlistPanelBody();
   wishlistModal.classList.remove('hidden');
   setAppDockTab('bookmark');
@@ -2090,6 +2188,22 @@ function renderSheetShell(book, gen, opts = {}) {
   hydrateSheetAuthorZones(book, primaryAuthor(authorRaw), gen);
 }
 
+function presentDetachedBookSheet(book, gen) {
+  sheetDetachedBook = book;
+  const sheet = $('book-sheet');
+  delete sheet.dataset.sheetBookIdx;
+  sheet.classList.remove('hidden');
+  sheet.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  closeWishlistModal();
+  const llmPending = !!(apiKey && !book._sheetLlmFetched);
+  renderSheetShell(book, gen, { llmPending });
+  const scrollEl = $('book-sheet-scroll');
+  if (scrollEl) scrollEl.scrollTop = 0;
+  if (llmPending) runSheetLlmEnrich(book, null, gen);
+  updateBookSheetBackButton();
+}
+
 async function openBookSheetFromSimilarTitle(title, author) {
   const t = String(title || '').trim();
   const a = String(author || '').trim();
@@ -2130,19 +2244,7 @@ async function openBookSheetFromSimilarTitle(title, author) {
     _sheetLlmFetched: false,
   };
 
-  sheetDetachedBook = book;
-  const sheet = $('book-sheet');
-  delete sheet.dataset.sheetBookIdx;
-  sheet.classList.remove('hidden');
-  sheet.setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
-
-  const llmPending = !!(apiKey && !book._sheetLlmFetched);
-  renderSheetShell(book, gen, { llmPending });
-  const scrollEl = $('book-sheet-scroll');
-  if (scrollEl) scrollEl.scrollTop = 0;
-  if (llmPending) runSheetLlmEnrich(book, null, gen);
-  updateBookSheetBackButton();
+  presentDetachedBookSheet(book, gen);
 }
 
 function openWishlistEntryById(id) {
@@ -2198,21 +2300,7 @@ async function openBookSheetFromWishlistItem(it) {
     };
   }
 
-  sheetDetachedBook = book;
-  const sheet = $('book-sheet');
-  delete sheet.dataset.sheetBookIdx;
-  sheet.classList.remove('hidden');
-  sheet.setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
-
-  closeWishlistModal();
-
-  const llmPending = !!(apiKey && !book._sheetLlmFetched);
-  renderSheetShell(book, gen, { llmPending });
-  const scrollEl = $('book-sheet-scroll');
-  if (scrollEl) scrollEl.scrollTop = 0;
-  if (llmPending) runSheetLlmEnrich(book, null, gen);
-  updateBookSheetBackButton();
+  presentDetachedBookSheet(book, gen);
 }
 
 function openBookSheet(idx) {
@@ -2469,7 +2557,7 @@ function clearArLayer() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
-const CONF_LABEL = { high: 'Sûr', medium: 'Probable', low: 'Incertain' };
+const CONF_LABEL = { high: 'Sûr', medium: 'Probable', low: 'Incertain', catalogue: 'Catalogue' };
 
 const GENRE_COLOR = {
   'Policier':         '#3b82f6',
@@ -2489,6 +2577,168 @@ const GENRE_COLOR = {
 function genreStyle(genre) {
   const c = GENRE_COLOR[genre] || '#6b7280';
   return `style="color:${c};background:${c}20;border-color:${c}40"`;
+}
+
+function loadSearchRecent() {
+  try {
+    const raw = localStorage.getItem(SEARCH_RECENT_KEY);
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && String(x).trim()).slice(0, SEARCH_RECENT_MAX) : [];
+  } catch { return []; }
+}
+
+function saveSearchRecent(query) {
+  const q = String(query || '').trim();
+  if (q.length < 2) return;
+  const key = normTitle(q);
+  let list = loadSearchRecent().filter(x => normTitle(x) !== key);
+  list.unshift(q.slice(0, 200));
+  list = list.slice(0, SEARCH_RECENT_MAX);
+  try {
+    localStorage.setItem(SEARCH_RECENT_KEY, JSON.stringify(list));
+  } catch { /* quota */ }
+}
+
+function renderSearchRecentPanel() {
+  if (!searchRecent) return;
+  const list = loadSearchRecent();
+  if (!list.length) {
+    searchRecent.classList.add('hidden');
+    searchRecent.innerHTML = '';
+    return;
+  }
+  searchRecent.classList.remove('hidden');
+  searchRecent.innerHTML = `<p class="search-recent-title">Recherches récentes</p><ul class="search-recent-list" role="list">${
+    list.map(q => `<li role="listitem"><button type="button" class="search-recent-chip" data-search-recent="${encodeURIComponent(q)}">${esc(q)}</button></li>`).join('')
+  }</ul>`;
+}
+
+function setSearchHint(msg, opts = {}) {
+  if (!searchHint) return;
+  const err = !!opts.error;
+  const show = opts.show !== false && !!String(msg || '').trim();
+  searchHint.textContent = msg ? String(msg) : '';
+  searchHint.classList.toggle('search-hint--error', err);
+  searchHint.classList.toggle('hidden', !show);
+}
+
+function updateSearchChrome() {
+  if (!bookSearchInput || !searchClearBtn) return;
+  const v = bookSearchInput.value.trim();
+  searchClearBtn.classList.toggle('hidden', v.length === 0);
+}
+
+function renderSearchResultCards(books) {
+  cachedSearchBooks = books;
+  if (!searchResultsList) return;
+  searchResultsList.innerHTML = '';
+  books.forEach((book, cardIdx) => {
+    const { title, author, confidence, genre, critique, info } = book;
+    const t = esc(info?.title || title);
+    const a = esc(info?.authors?.join(', ') || author || 'Auteur inconnu');
+    const img = info?.imageLinks?.thumbnail?.replace('http:', 'https:');
+    const pages = info?.pageCount;
+    const year = info?.publishedDate?.slice(0, 4);
+    const conf = confidence || 'medium';
+    const gStr = genre ? esc(genre) : null;
+    const displayNote = info?.averageRating;
+    const teaser = critique
+      ? esc(critique.length > 140 ? `${critique.slice(0, 137)}…` : critique)
+      : '';
+    const onWl = wishlistHasId(enrichedBookStableId(book));
+    const wlLabel = onWl ? 'Retirer de ma liste' : 'Ajouter à ma liste';
+    const R = retailSearchUrls(title, author);
+    searchResultsList.insertAdjacentHTML('beforeend', `
+      <article class="book-card book-card--search" data-search-idx="${cardIdx}" tabindex="0" role="button" aria-label="Ouvrir la fiche : ${t}">
+        <div class="card-top">
+          <div class="book-thumb">
+            ${img ? `<img src="${img}" loading="lazy" alt="">` : '<span class="thumb-ph" aria-hidden="true"></span>'}
+          </div>
+          <div class="card-meta">
+            <div class="card-meta-head">
+              <div class="card-meta-stack">
+                <div class="book-title">${t}</div>
+                <div class="book-author">${a}</div>
+                <div class="tag-row">
+                  ${gStr ? `<span class="tag tag-genre" ${genreStyle(genre)}>${gStr}</span>` : ''}
+                  ${displayNote ? `<span class="tag tag-note" title="Note publique">★ ${Number(displayNote).toFixed(1)}</span>` : ''}
+                  ${year ? `<span class="tag tag-meta">${year}</span>` : ''}
+                  ${pages ? `<span class="tag tag-meta">${pages} p.</span>` : ''}
+                  <span class="tag conf-${conf}">${esc(CONF_LABEL[conf] || conf)}</span>
+                </div>
+                ${teaser ? `<p class="card-teaser">${teaser}</p>` : ''}
+              </div>
+              <button type="button" class="wishlist-card-btn${onWl ? ' is-on' : ''}" data-wishlist-search="${cardIdx}" aria-pressed="${onWl ? 'true' : 'false'}" aria-label="${esc(wlLabel)}" title="${esc(wlLabel)}">${onWl ? '♥' : '♡'}</button>
+            </div>
+          </div>
+        </div>
+        <div class="book-card-hint"><span>Fiche complète</span><span>›</span></div>
+        <div class="card-footer">
+          <a class="card-link fnac" href="${R.fnac}" target="_blank" rel="noopener">Fnac ↗</a>
+          <a class="card-link amazon" href="${R.amazon}" target="_blank" rel="noopener">Amazon ↗</a>
+          <a class="card-link barnes" href="${R.barnes}" target="_blank" rel="noopener">B&amp;N ↗</a>
+          <a class="card-link" href="${R.senscritique}" target="_blank" rel="noopener">SensCritique ↗</a>
+        </div>
+      </article>`);
+  });
+}
+
+function scheduleBookSearchDebounced() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    const q = (bookSearchInput?.value || '').trim();
+    if (q.length < 2) return;
+    void runBookSearchFromUi();
+  }, 480);
+}
+
+async function runBookSearchFromUi() {
+  const raw = bookSearchInput?.value ?? '';
+  const q = raw.trim();
+  updateSearchChrome();
+  if (q.length < 2) {
+    setSearchHint('Saisissez au moins 2 caractères.', { show: true, error: false });
+    return;
+  }
+  searchUiRequestGen += 1;
+  const gen = searchUiRequestGen;
+  setSearchHint('Recherche dans le catalogue…', { show: true, error: false });
+  if (searchSubmitBtn) searchSubmitBtn.disabled = true;
+  searchEmpty?.classList.add('hidden');
+  renderSearchResultCards([]);
+  try {
+    const items = await fetchBooksSearch(q);
+    if (gen !== searchUiRequestGen) return;
+    const books = items.map(googleVolumeToBook);
+    if (!books.length) {
+      setSearchHint('Aucun livre trouvé — essayez d’autres mots ou un autre auteur.', { show: true, error: false });
+      renderSearchResultCards([]);
+      return;
+    }
+    saveSearchRecent(q);
+    renderSearchRecentPanel();
+    setSearchHint('', { show: false });
+    renderSearchResultCards(books);
+  } catch (e) {
+    if (gen !== searchUiRequestGen) return;
+    setSearchHint(e?.message || 'Erreur réseau.', { show: true, error: true });
+    renderSearchResultCards([]);
+  } finally {
+    if (gen === searchUiRequestGen && searchSubmitBtn) searchSubmitBtn.disabled = false;
+  }
+}
+
+function openBookSheetFromSearchIdx(idx) {
+  const book = cachedSearchBooks[idx];
+  if (!book) return;
+  const sheetOpen = $('book-sheet');
+  if (sheetOpen && !sheetOpen.classList.contains('hidden')) {
+    pushSheetHistoryIfOpen();
+  }
+  bookSheetLoadGen += 1;
+  const gen = bookSheetLoadGen;
+  presentDetachedBookSheet(book, gen);
 }
 
 function stars(n) {
@@ -2610,6 +2860,11 @@ document.addEventListener('keydown', e => {
     closeSettings();
     return;
   }
+  if (isSearchScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
+    return;
+  }
   const sheet = $('book-sheet');
   if (sheet && !sheet.classList.contains('hidden')) {
     if (bookSheetHistoryStack.length) {
@@ -2707,6 +2962,7 @@ function resetPhotoState() {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 function openSettings() {
+  showScanScreen();
   apiKeyIn.value = apiKey;
   apiKeyIn.type = 'password';
   if (toggleKeyBtn) toggleKeyBtn.textContent = 'Afficher';
@@ -2758,6 +3014,7 @@ function esc(s) {
 // ── Events ────────────────────────────────────────────────────────────────────
 function onMainButtonClick() {
   if (busy) return;
+  if (isSearchScreenActive()) showScanScreen();
   setAppDockTab('scan');
   if (!uploadedImg) {
     fileInputCamera?.click();
@@ -2773,13 +3030,19 @@ resultsDrawerToggle?.addEventListener('click', () => {
   if (!wasCollapsed && appDockTab === 'history') setAppDockTab('scan');
 });
 uploadBtn.addEventListener('click', () => {
+  if (isSearchScreenActive()) showScanScreen();
   setAppDockTab('scan');
   fileInputGallery?.click();
 });
 fileInputCamera?.addEventListener('change', e => { loadFile(e.target.files?.[0]); e.target.value = ''; });
 fileInputGallery?.addEventListener('change', e => { loadFile(e.target.files?.[0]); e.target.value = ''; });
 previewBack.addEventListener('click', resetPhotoState);
-viewportEmpty?.addEventListener('click', () => { if (!busy) fileInputCamera?.click(); });
+viewportEmpty?.addEventListener('click', () => {
+  if (busy) return;
+  if (isSearchScreenActive()) showScanScreen();
+  setAppDockTab('scan');
+  fileInputCamera?.click();
+});
 clearBtn.addEventListener('click', () => {
   if (resultsPanel.classList.contains('has-results') && resultsList.querySelector('.book-card')) {
     if (!confirm('Effacer les résultats du scan ? Votre liste de souhaits locale est conservée.')) return;
@@ -2793,6 +3056,7 @@ clearBtn.addEventListener('click', () => {
 });
 settingsBtn.addEventListener('click', openSettings);
 dockHistoryBtn?.addEventListener('click', () => openHistoryFromDock());
+dockSearchBtn?.addEventListener('click', () => openSearchScreen());
 backdrop.addEventListener('click', closeSettings);
 toggleKeyBtn?.addEventListener('click', () => {
   const show = apiKeyIn.type === 'password';
@@ -2966,7 +3230,108 @@ initPhotoZoomHandlers();
 
 document.addEventListener('paste', e => {
   const item = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));
-  if (item) loadFile(item.getAsFile());
+  if (item) {
+    if (isSearchScreenActive()) showScanScreen();
+    setAppDockTab('scan');
+    loadFile(item.getAsFile());
+  }
+});
+
+searchResultsList?.addEventListener('click', e => {
+  const wlCard = e.target.closest('[data-wishlist-search]');
+  if (wlCard) {
+    e.preventDefault();
+    e.stopPropagation();
+    const ci = parseInt(wlCard.getAttribute('data-wishlist-search'), 10);
+    const b = Number.isFinite(ci) ? cachedSearchBooks[ci] : null;
+    if (!b) return;
+    const r = wishlistToggleFromBook(b);
+    if (!r.ok) {
+      setHint(r.quota ? 'Stockage plein : retirez des livres de la liste ou libérez de l’espace navigateur.' : 'Impossible d’enregistrer la liste.');
+      return;
+    }
+    refreshWishlistDependentUi();
+    return;
+  }
+  if (e.target.closest('a.card-link')) return;
+  const card = e.target.closest('[data-search-idx]');
+  if (!card) return;
+  const idx = parseInt(card.dataset.searchIdx, 10);
+  if (Number.isFinite(idx)) openBookSheetFromSearchIdx(idx);
+});
+
+searchResultsList?.addEventListener('keydown', e => {
+  const wlBtn = e.target.closest('[data-wishlist-search]');
+  if (wlBtn && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    e.stopPropagation();
+    wlBtn.click();
+    return;
+  }
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const card = e.target.closest('[data-search-idx]');
+  if (!card || e.target.closest('a.card-link')) return;
+  e.preventDefault();
+  const idx = parseInt(card.dataset.searchIdx, 10);
+  if (Number.isFinite(idx)) openBookSheetFromSearchIdx(idx);
+});
+
+bookSearchInput?.addEventListener('input', () => {
+  updateSearchChrome();
+  const q = bookSearchInput.value.trim();
+  if (q.length < 2) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+    searchUiRequestGen += 1;
+    setSearchHint('', { show: false });
+    renderSearchResultCards([]);
+    searchEmpty?.classList.remove('hidden');
+    if (searchSubmitBtn) searchSubmitBtn.disabled = false;
+    return;
+  }
+  scheduleBookSearchDebounced();
+});
+
+bookSearchInput?.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+  void runBookSearchFromUi();
+});
+
+searchClearBtn?.addEventListener('click', () => {
+  if (bookSearchInput) bookSearchInput.value = '';
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+  searchUiRequestGen += 1;
+  updateSearchChrome();
+  setSearchHint('', { show: false });
+  renderSearchResultCards([]);
+  searchEmpty?.classList.remove('hidden');
+  if (searchSubmitBtn) searchSubmitBtn.disabled = false;
+  bookSearchInput?.focus();
+});
+
+searchSubmitBtn?.addEventListener('click', () => {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+  void runBookSearchFromUi();
+});
+
+searchRecent?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-search-recent]');
+  if (!btn || !bookSearchInput) return;
+  const enc = btn.getAttribute('data-search-recent') || '';
+  try {
+    bookSearchInput.value = decodeURIComponent(enc);
+  } catch {
+    bookSearchInput.value = enc;
+  }
+  updateSearchChrome();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+  void runBookSearchFromUi();
 });
 
 $('book-sheet-backdrop')?.addEventListener('click', closeBookSheet);
@@ -2994,13 +3359,7 @@ $('book-sheet')?.addEventListener('click', async e => {
     setHint(r.quota ? 'Stockage plein : retirez des livres de la liste ou libérez de l’espace navigateur.' : 'Impossible d’enregistrer la liste.');
     return;
   }
-  patchSheetWishlistButton();
-  updateWishlistHeaderBadge();
-  renderWishlistPanelBody();
-  if (resultsPanel?.classList.contains('has-results') && cachedEnrichedBooks?.length) {
-    renderCards(cachedEnrichedBooks);
-    patchArMarkersWithCovers(cachedEnrichedBooks);
-  }
+  refreshWishlistDependentUi();
 });
 
 wishlistBtn?.addEventListener('click', () => openWishlistModal());
