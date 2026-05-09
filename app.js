@@ -120,6 +120,7 @@ const resultsList  = $('results-list');
 const resultsLabel = $('results-label');
 const clearBtn     = $('clear-btn');
 const wishlistBtn = $('wishlist-btn');
+const dockHistoryBtn = $('dock-history-btn');
 const wishlistBadge = $('wishlist-badge');
 const wishlistModal = $('wishlist-modal');
 const wishlistBackdrop = $('wishlist-modal-backdrop');
@@ -150,6 +151,36 @@ const zoomControls = $('viewport-zoom-controls');
 const zoomInBtn    = $('zoom-in-btn');
 const zoomOutBtn   = $('zoom-out-btn');
 const zoomResetBtn = $('zoom-reset-btn');
+
+/** Onglet mis en avant dans la barre dock (scan = FAB central). */
+let appDockTab = 'scan';
+
+function setAppDockTab(tab) {
+  appDockTab = tab;
+  dockHistoryBtn?.classList.toggle('is-active', tab === 'history');
+  wishlistBtn?.classList.toggle('is-active', tab === 'bookmark');
+  settingsBtn?.classList.toggle('is-active', tab === 'settings');
+  scanBtn?.classList.toggle('is-active', tab === 'scan');
+  const setCur = (el, on) => {
+    if (!el) return;
+    if (on) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  };
+  setCur(dockHistoryBtn, tab === 'history');
+  setCur(wishlistBtn, tab === 'bookmark');
+  setCur(settingsBtn, tab === 'settings');
+  setCur(scanBtn, tab === 'scan');
+}
+
+function openHistoryFromDock() {
+  closeSettings();
+  closeWishlistModal();
+  expandResultsDrawer();
+  const body = $('results-panel-body');
+  if (body) body.scrollTop = 0;
+  setAppDockTab('history');
+  resultsDrawerToggle?.focus({ preventScroll: true });
+}
 
 /** Zoom / pan sur la photo (roulette, boutons, glisser souris, 1 doigt tactile, pincement 2 doigts). */
 const PHOTO_ZOOM_MIN = 0.92;
@@ -1297,10 +1328,12 @@ function openWishlistModal() {
   if (!wishlistModal) return;
   renderWishlistPanelBody();
   wishlistModal.classList.remove('hidden');
+  setAppDockTab('bookmark');
 }
 
 function closeWishlistModal() {
   wishlistModal?.classList.add('hidden');
+  if (appDockTab === 'bookmark') setAppDockTab('scan');
 }
 
 function renderWishlistPanelBody() {
@@ -2680,10 +2713,12 @@ function openSettings() {
   modelSel.value   = model;
   if (fastModeCheck) fastModeCheck.checked = fastMode;
   modal.classList.remove('hidden');
+  setAppDockTab('settings');
 }
 
 function closeSettings() {
   modal.classList.add('hidden');
+  if (appDockTab === 'settings') setAppDockTab('scan');
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -2723,6 +2758,7 @@ function esc(s) {
 // ── Events ────────────────────────────────────────────────────────────────────
 function onMainButtonClick() {
   if (busy) return;
+  setAppDockTab('scan');
   if (!uploadedImg) {
     fileInputCamera?.click();
     return;
@@ -2732,9 +2768,14 @@ function onMainButtonClick() {
 
 scanBtn.addEventListener('click', onMainButtonClick);
 resultsDrawerToggle?.addEventListener('click', () => {
-  setResultsExpanded(resultsPanel.classList.contains('collapsed'));
+  const wasCollapsed = resultsPanel.classList.contains('collapsed');
+  setResultsExpanded(wasCollapsed);
+  if (!wasCollapsed && appDockTab === 'history') setAppDockTab('scan');
 });
-uploadBtn.addEventListener('click', () => fileInputGallery?.click());
+uploadBtn.addEventListener('click', () => {
+  setAppDockTab('scan');
+  fileInputGallery?.click();
+});
 fileInputCamera?.addEventListener('change', e => { loadFile(e.target.files?.[0]); e.target.value = ''; });
 fileInputGallery?.addEventListener('change', e => { loadFile(e.target.files?.[0]); e.target.value = ''; });
 previewBack.addEventListener('click', resetPhotoState);
@@ -2751,6 +2792,7 @@ clearBtn.addEventListener('click', () => {
   setHint('');
 });
 settingsBtn.addEventListener('click', openSettings);
+dockHistoryBtn?.addEventListener('click', () => openHistoryFromDock());
 backdrop.addEventListener('click', closeSettings);
 toggleKeyBtn?.addEventListener('click', () => {
   const show = apiKeyIn.type === 'password';
@@ -3012,3 +3054,5 @@ window.addEventListener('storage', e => {
   else wishlistApplyFromJsonString(e.newValue);
   refreshWishlistDependentUi();
 });
+
+setAppDockTab('scan');
