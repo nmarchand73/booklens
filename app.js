@@ -188,48 +188,78 @@ function setAppDockTab(tab) {
   setCur(scanBtn, tab === 'scan');
 }
 
+const FLOW_ACTIVE_CLASS = 'split-flow-layer--active';
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Défilement doux vers le haut (listes recherche / résultats scan). */
+function scrollPanelToTop(el, smooth) {
+  if (!el) return;
+  try {
+    el.scrollTo({ top: 0, behavior: smooth && !prefersReducedMotion() ? 'smooth' : 'auto' });
+  } catch {
+    el.scrollTop = 0;
+  }
+}
+
+function syncFlowInert(which) {
+  [
+    ['scan', screenScan],
+    ['search', screenSearch],
+    ['results', screenResults],
+  ].forEach(([key, el]) => {
+    if (!el || typeof el !== 'object') return;
+    const active = key === which;
+    if ('inert' in el) el.inert = !active;
+  });
+}
+
+/** `which` : scan | search | results — fondu CSS entre les trois panneaux. */
+function setFlowScreen(which) {
+  if (which !== 'scan' && which !== 'search' && which !== 'results') return;
+  screenScan?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'scan');
+  screenSearch?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'search');
+  screenResults?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'results');
+  screenScan?.setAttribute('aria-hidden', which !== 'scan');
+  screenSearch?.setAttribute('aria-hidden', which !== 'search');
+  screenResults?.setAttribute('aria-hidden', which !== 'results');
+  splitRoot?.classList.toggle('split-root--search', which === 'search');
+  syncFlowInert(which);
+  scheduleArReflow();
+}
+
 function isSearchScreenActive() {
-  return !!(screenSearch && !screenSearch.classList.contains('hidden'));
+  return !!(screenSearch && screenSearch.classList.contains(FLOW_ACTIVE_CLASS));
 }
 
 function isResultsScreenActive() {
-  return !!(screenResults && !screenResults.classList.contains('hidden'));
+  return !!(screenResults && screenResults.classList.contains(FLOW_ACTIVE_CLASS));
 }
 
 function showScanScreen() {
-  screenScan?.classList.remove('hidden');
-  screenSearch?.classList.add('hidden');
-  screenResults?.classList.add('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'true');
-  if (screenResults) screenResults.setAttribute('aria-hidden', 'true');
-  splitRoot?.classList.remove('split-root--search');
-  scheduleArReflow();
+  setFlowScreen('scan');
 }
 
 function showResultsScreen() {
   closeWishlistModal();
-  screenScan?.classList.add('hidden');
-  screenSearch?.classList.add('hidden');
-  screenResults?.classList.remove('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'true');
-  if (screenResults) screenResults.setAttribute('aria-hidden', 'false');
-  splitRoot?.classList.remove('split-root--search');
-  scheduleArReflow();
+  setFlowScreen('results');
 }
 
 function openSearchScreen() {
   closeSettings();
   closeWishlistModal();
-  screenScan?.classList.add('hidden');
-  screenResults?.classList.add('hidden');
-  screenSearch?.classList.remove('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'false');
-  if (screenResults) screenResults.setAttribute('aria-hidden', 'true');
-  splitRoot?.classList.add('split-root--search');
+  setFlowScreen('search');
   setAppDockTab('search');
   renderSearchRecentPanel();
   updateSearchChrome();
-  bookSearchInput?.focus({ preventScroll: true });
+  scrollPanelToTop($('search-scroll'), true);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      bookSearchInput?.focus({ preventScroll: true });
+    });
+  });
 }
 
 function openHistoryFromDock() {
@@ -237,10 +267,11 @@ function openHistoryFromDock() {
   closeWishlistModal();
   if (resultsPanel?.classList.contains('has-results') && resultsList?.querySelector('.book-card')) {
     showResultsScreen();
-    const body = $('results-panel-body');
-    if (body) body.scrollTop = 0;
+    scrollPanelToTop(resultsList, true);
     setAppDockTab('history');
-    clearBtn?.focus({ preventScroll: true });
+    requestAnimationFrame(() => {
+      clearBtn?.focus({ preventScroll: true });
+    });
     return;
   }
   showScanScreen();
@@ -2637,7 +2668,10 @@ function renderCards(books, revealResults = true) {
         </div>
       </article>`);
   });
-  if (revealResults) showResultsScreen();
+  if (revealResults) {
+    showResultsScreen();
+    scrollPanelToTop(resultsList, true);
+  }
   scheduleArReflow();
 }
 
@@ -3246,4 +3280,5 @@ window.addEventListener('storage', e => {
   refreshWishlistDependentUi();
 });
 
+syncFlowInert('scan');
 setAppDockTab('scan');

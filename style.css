@@ -94,26 +94,43 @@ body {
   overflow: hidden;
 }
 .split-top {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
-.screen-scan {
+
+/* Écrans empilés : fondu entre scan, recherche catalogue et liste résultats */
+.split-flow-layer {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
 }
+.split-flow-layer.split-flow-layer--active {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-flow-layer {
+    transition-duration: 0.06s;
+  }
+}
+
 .split-top #viewport {
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.split-root.split-root--search #screen-results {
-  display: none !important;
 }
 
 /* ── Recherche titre / auteur (Google Books) ───────────────────────────────── */
@@ -125,9 +142,6 @@ body {
   background: var(--bg);
   overflow: hidden;
 }
-.screen-search.hidden {
-  display: none !important;
-}
 
 .screen-results {
   flex: 1 1 auto;
@@ -136,9 +150,6 @@ body {
   flex-direction: column;
   background: var(--bg);
   overflow: hidden;
-}
-.screen-results.hidden {
-  display: none !important;
 }
 .scan-results {
   flex: 1 1 auto;
