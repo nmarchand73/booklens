@@ -157,6 +157,7 @@ const resultsDrawerToggle = $('results-drawer-toggle');
 const resultsPanel = $('results');
 const splitRoot = $('split-root');
 const splitTop = $('split-top');
+const appDock = $('app-dock');
 const splitGutter = $('split-gutter');
 const vp           = $('viewport');
 const arLayer      = $('ar-layer');
@@ -336,6 +337,15 @@ function persistSplitFracFromPixels(bottomPx, avail) {
   localStorage.setItem(SPLIT_STORAGE_KEY, String(f));
 }
 
+/** Hauteur utile pour partager photo / tiroir (hors gutter et barre de navigation fixe en bas). */
+function splitPaneAvailHeightPx() {
+  if (!splitRoot || !splitGutter) return 0;
+  const rootR = splitRoot.getBoundingClientRect();
+  const gh = splitGutter.offsetHeight || 40;
+  const dockH = appDock ? appDock.offsetHeight : 0;
+  return Math.max(1, rootR.height - gh - dockH);
+}
+
 function applySplitLayout() {
   if (!splitRoot || !splitTop || !resultsPanel || !splitGutter) return;
 
@@ -374,9 +384,7 @@ function applySplitLayout() {
   }
 
   splitRoot.classList.add('split-custom');
-  const rootR = splitRoot.getBoundingClientRect();
-  const gh = splitGutter.offsetHeight || 40;
-  const avail = Math.max(1, rootR.height - gh);
+  const avail = splitPaneAvailHeightPx();
   const minBot = splitMinBottomPx();
   const minTop = splitMinTopPx();
   let bottomPx = avail * frac;
@@ -402,7 +410,7 @@ function initSplitPaneResize() {
     ev.preventDefault();
     const rootR = splitRoot.getBoundingClientRect();
     const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
+    const avail = splitPaneAvailHeightPx();
     const minTop = splitMinTopPx();
     const minBot = splitMinBottomPx();
     const y = ev.clientY;
@@ -429,9 +437,7 @@ function initSplitPaneResize() {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', endDrag);
     window.removeEventListener('pointercancel', endDrag);
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
+    const avail = splitPaneAvailHeightPx();
     const bottomPx = resultsPanel.getBoundingClientRect().height;
     persistSplitFracFromPixels(bottomPx, avail);
     applySplitLayout();
@@ -457,9 +463,7 @@ function initSplitPaneResize() {
     if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
     ev.preventDefault();
     const step = ev.shiftKey ? 32 : 16;
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
+    const avail = splitPaneAvailHeightPx();
     const stored = readSplitBottomFrac();
     const curBottom = stored != null ? avail * stored : resultsPanel.getBoundingClientRect().height;
     /* Bas = plus d’espace pour les résultats (intuitif clavier / lecteurs d’écran). */
@@ -472,6 +476,7 @@ function initSplitPaneResize() {
 
   const splitRo = new ResizeObserver(() => applySplitLayout());
   splitRo.observe(splitRoot);
+  if (appDock) splitRo.observe(appDock);
 
   requestAnimationFrame(() => {
     applySplitLayout();

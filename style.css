@@ -1127,13 +1127,14 @@ header {
   min-height: 56px;
 }
 
-/* ── Dock navigation (îlot flottant — scan, signets, historique, réglages) ─── */
+/* ── Dock navigation (barre inférieure fixe dans la colonne — scan, recherche, signets, etc.) ─ */
 .app-dock {
   flex-shrink: 0;
-  margin: 0 10px;
-  padding: 0 0 max(2px, env(safe-area-inset-bottom));
+  margin: 10px 10px 0;
+  padding: 10px 0 max(2px, env(safe-area-inset-bottom));
   position: relative;
   z-index: 6;
+  border-top: 1px solid var(--border);
 }
 .app-dock-inner {
   display: grid;
@@ -3259,8 +3260,8 @@ button.sheet-sim-open:hover {
     padding: var(--space-2) var(--space-2) var(--space-1);
   }
   .app-dock {
-    margin: 0 8px;
-    padding-bottom: max(0px, env(safe-area-inset-bottom));
+    margin: 8px 8px 0;
+    padding: 8px 0 max(0px, env(safe-area-inset-bottom));
   }
   .app-dock-inner {
     padding: 8px 6px 6px;
@@ -3346,6 +3347,7 @@ button.sheet-sim-open:hover {
   .app-dock {
     margin-left: 6px;
     margin-right: 6px;
+    margin-top: 8px;
   }
   .results-drawer.has-results {
     flex: 1 1 24%;
