@@ -153,11 +153,9 @@ const toggleKeyBtn = $('toggle-key-btn');
 const hintLine     = $('hint-line');
 /** Une seule consigne au démarrage (le titre viewport dit quoi photographier). */
 const STATUS_IDLE_NO_IMAGE = 'Photo, Importer ou fichier — une image, puis Envoyer.';
-const resultsDrawerToggle = $('results-drawer-toggle');
 const resultsPanel = $('results');
 const splitRoot = $('split-root');
-const splitTop = $('split-top');
-const splitGutter = $('split-gutter');
+const screenResults = $('screen-results');
 const vp           = $('viewport');
 const arLayer      = $('ar-layer');
 const zoomRoot     = $('viewport-zoom-root');
@@ -190,42 +188,94 @@ function setAppDockTab(tab) {
   setCur(scanBtn, tab === 'scan');
 }
 
+const FLOW_ACTIVE_CLASS = 'split-flow-layer--active';
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Défilement doux vers le haut (listes recherche / résultats scan). */
+function scrollPanelToTop(el, smooth) {
+  if (!el) return;
+  try {
+    el.scrollTo({ top: 0, behavior: smooth && !prefersReducedMotion() ? 'smooth' : 'auto' });
+  } catch {
+    el.scrollTop = 0;
+  }
+}
+
+function syncFlowInert(which) {
+  [
+    ['scan', screenScan],
+    ['search', screenSearch],
+    ['results', screenResults],
+  ].forEach(([key, el]) => {
+    if (!el || typeof el !== 'object') return;
+    const active = key === which;
+    if ('inert' in el) el.inert = !active;
+  });
+}
+
+/** `which` : scan | search | results — fondu CSS entre les trois panneaux. */
+function setFlowScreen(which) {
+  if (which !== 'scan' && which !== 'search' && which !== 'results') return;
+  screenScan?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'scan');
+  screenSearch?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'search');
+  screenResults?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'results');
+  screenScan?.setAttribute('aria-hidden', which !== 'scan');
+  screenSearch?.setAttribute('aria-hidden', which !== 'search');
+  screenResults?.setAttribute('aria-hidden', which !== 'results');
+  splitRoot?.classList.toggle('split-root--search', which === 'search');
+  syncFlowInert(which);
+  scheduleArReflow();
+}
+
 function isSearchScreenActive() {
-  return !!(screenSearch && !screenSearch.classList.contains('hidden'));
+  return !!(screenSearch && screenSearch.classList.contains(FLOW_ACTIVE_CLASS));
+}
+
+function isResultsScreenActive() {
+  return !!(screenResults && screenResults.classList.contains(FLOW_ACTIVE_CLASS));
 }
 
 function showScanScreen() {
-  screenScan?.classList.remove('hidden');
-  screenSearch?.classList.add('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'true');
-  splitRoot?.classList.remove('split-root--search');
-  applySplitLayout();
-  scheduleArReflow();
+  setFlowScreen('scan');
+}
+
+function showResultsScreen() {
+  closeWishlistModal();
+  setFlowScreen('results');
 }
 
 function openSearchScreen() {
   closeSettings();
   closeWishlistModal();
-  screenScan?.classList.add('hidden');
-  screenSearch?.classList.remove('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'false');
-  splitRoot?.classList.add('split-root--search');
+  setFlowScreen('search');
   setAppDockTab('search');
-  applySplitLayout();
   renderSearchRecentPanel();
   updateSearchChrome();
-  bookSearchInput?.focus({ preventScroll: true });
+  scrollPanelToTop($('search-scroll'), true);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      bookSearchInput?.focus({ preventScroll: true });
+    });
+  });
 }
 
 function openHistoryFromDock() {
-  showScanScreen();
   closeSettings();
   closeWishlistModal();
-  expandResultsDrawer();
-  const body = $('results-panel-body');
-  if (body) body.scrollTop = 0;
-  setAppDockTab('history');
-  resultsDrawerToggle?.focus({ preventScroll: true });
+  if (resultsPanel?.classList.contains('has-results') && resultsList?.querySelector('.book-card')) {
+    showResultsScreen();
+    scrollPanelToTop(resultsList, true);
+    setAppDockTab('history');
+    requestAnimationFrame(() => {
+      clearBtn?.focus({ preventScroll: true });
+    });
+    return;
+  }
+  showScanScreen();
+  setAppDockTab('scan');
 }
 
 /** Zoom / pan sur la photo (roulette, boutons, glisser souris, 1 doigt tactile, pincement 2 doigts). */
@@ -305,177 +355,6 @@ function scheduleArReflow() {
       renderArMarkers(lastBooksForAr);
       if (lastEnrichedForAr.length) patchArMarkersWithCovers(lastEnrichedForAr);
     });
-  });
-}
-
-const SPLIT_STORAGE_KEY = 'bl_split_bottom_frac';
-
-function clampSplitNum(n, lo, hi) {
-  return Math.min(hi, Math.max(lo, n));
-}
-
-function readSplitBottomFrac() {
-  const raw = localStorage.getItem(SPLIT_STORAGE_KEY);
-  const v = parseFloat(raw);
-  if (!Number.isFinite(v) || v < 0.12 || v > 0.88) return null;
-  return v;
-}
-
-function splitMinBottomPx() {
-  if (resultsPanel.classList.contains('collapsed')) return 0;
-  return resultsPanel.classList.contains('has-results') ? 140 : 96;
-}
-
-function splitMinTopPx() {
-  return 120;
-}
-
-function persistSplitFracFromPixels(bottomPx, avail) {
-  if (avail <= 0) return;
-  const f = clampSplitNum(bottomPx / avail, 0.12, 0.88);
-  localStorage.setItem(SPLIT_STORAGE_KEY, String(f));
-}
-
-function applySplitLayout() {
-  if (!splitRoot || !splitTop || !resultsPanel || !splitGutter) return;
-
-  if (splitRoot.classList.contains('split-root--search')) {
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitRoot.classList.remove('split-custom');
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  const collapsed = resultsPanel.classList.contains('collapsed');
-  splitRoot.classList.toggle('split-gutter--disabled', collapsed);
-
-  if (collapsed) {
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitRoot.classList.remove('split-custom');
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  const frac = readSplitBottomFrac();
-  if (frac == null) {
-    splitRoot.classList.remove('split-custom');
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  splitRoot.classList.add('split-custom');
-  const rootR = splitRoot.getBoundingClientRect();
-  const gh = splitGutter.offsetHeight || 40;
-  const avail = Math.max(1, rootR.height - gh);
-  const minBot = splitMinBottomPx();
-  const minTop = splitMinTopPx();
-  let bottomPx = avail * frac;
-  bottomPx = clampSplitNum(bottomPx, minBot, Math.max(minBot, avail - minTop));
-  const topPx = avail - bottomPx;
-
-  splitTop.style.flex = '0 0 auto';
-  splitTop.style.height = `${Math.round(topPx)}px`;
-  resultsPanel.style.flex = '0 0 auto';
-  resultsPanel.style.height = `${Math.round(bottomPx)}px`;
-
-  const pct = Math.round((bottomPx / avail) * 100);
-  splitGutter.setAttribute('aria-valuenow', String(clampSplitNum(pct, 8, 92)));
-}
-
-function initSplitPaneResize() {
-  if (!splitGutter || !splitRoot || !splitTop || !resultsPanel) return;
-
-  let activePointer = null;
-
-  function onMove(ev) {
-    if (activePointer === null || ev.pointerId !== activePointer) return;
-    ev.preventDefault();
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
-    const minTop = splitMinTopPx();
-    const minBot = splitMinBottomPx();
-    const y = ev.clientY;
-    let topPx = y - rootR.top - gh / 2;
-    topPx = clampSplitNum(topPx, minTop, avail - minBot);
-    const bottomPx = avail - topPx;
-    splitRoot.classList.add('split-custom');
-    splitTop.style.flex = '0 0 auto';
-    splitTop.style.height = `${Math.round(topPx)}px`;
-    resultsPanel.style.flex = '0 0 auto';
-    resultsPanel.style.height = `${Math.round(bottomPx)}px`;
-    const pct = Math.round((bottomPx / avail) * 100);
-    splitGutter.setAttribute('aria-valuenow', String(clampSplitNum(pct, 8, 92)));
-  }
-
-  function endDrag(ev) {
-    if (activePointer === null || (ev.pointerId != null && ev.pointerId !== activePointer)) return;
-    const pid = activePointer;
-    activePointer = null;
-    try {
-      splitGutter.releasePointerCapture(pid);
-    } catch (_) { /* ignore */ }
-    splitRoot.classList.remove('split-gutter-active');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', endDrag);
-    window.removeEventListener('pointercancel', endDrag);
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
-    const bottomPx = resultsPanel.getBoundingClientRect().height;
-    persistSplitFracFromPixels(bottomPx, avail);
-    applySplitLayout();
-    scheduleArReflow();
-  }
-
-  splitGutter.addEventListener('pointerdown', ev => {
-    if (resultsPanel.classList.contains('collapsed')) return;
-    if (ev.button !== undefined && ev.button !== 0) return;
-    activePointer = ev.pointerId;
-    splitRoot.classList.add('split-gutter-active');
-    try {
-      splitGutter.setPointerCapture(ev.pointerId);
-    } catch (_) { /* ignore */ }
-    window.addEventListener('pointermove', onMove, { passive: false });
-    window.addEventListener('pointerup', endDrag);
-    window.addEventListener('pointercancel', endDrag);
-    ev.preventDefault();
-  });
-
-  splitGutter.addEventListener('keydown', ev => {
-    if (resultsPanel.classList.contains('collapsed')) return;
-    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
-    ev.preventDefault();
-    const step = ev.shiftKey ? 32 : 16;
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = Math.max(1, rootR.height - gh);
-    const stored = readSplitBottomFrac();
-    const curBottom = stored != null ? avail * stored : resultsPanel.getBoundingClientRect().height;
-    /* Bas = plus d’espace pour les résultats (intuitif clavier / lecteurs d’écran). */
-    const delta = ev.key === 'ArrowDown' ? step : -step;
-    const newBottom = clampSplitNum(curBottom + delta, splitMinBottomPx(), avail - splitMinTopPx());
-    persistSplitFracFromPixels(newBottom, avail);
-    applySplitLayout();
-    scheduleArReflow();
-  });
-
-  const splitRo = new ResizeObserver(() => applySplitLayout());
-  splitRo.observe(splitRoot);
-
-  requestAnimationFrame(() => {
-    applySplitLayout();
-    scheduleArReflow();
   });
 }
 
@@ -1413,7 +1292,7 @@ function refreshWishlistDependentUi() {
   patchSheetWishlistButton();
   renderWishlistPanelBody();
   if (resultsPanel?.classList.contains('has-results') && Array.isArray(cachedEnrichedBooks) && cachedEnrichedBooks.length) {
-    renderCards(cachedEnrichedBooks);
+    renderCards(cachedEnrichedBooks, false);
     patchArMarkersWithCovers(cachedEnrichedBooks);
   }
   if (cachedSearchBooks?.length && searchResultsList) {
@@ -2358,7 +2237,6 @@ async function scan() {
   vp.classList.add('scanning');
   refreshScanPixelLayer();
   clearArLayer();
-  expandResultsDrawer();
   setStatus('Étape 1/2 — analyse de l’image…');
   setHint('Envoi du cliché au modèle…');
   showSkeletons();
@@ -2375,10 +2253,10 @@ async function scan() {
       return;
     }
 
-    // Phase 1 résultat — repères RA sur l’image ; détail dans le panneau du bas
+    // Phase 1 résultat — repères RA sur l’image ; détail dans la liste après enrichissement
     renderArMarkers(books);
     setStatus(`Étape 2/2 — ${books.length} livre(s), chargement des couvertures…`);
-    setHint('Patience : les fiches complètes arrivent dans le panneau du bas.');
+    setHint('Patience : les fiches complètes arrivent dans la liste.');
 
     // Phase 2 — couvertures Google Books en parallèle
     const enriched = await Promise.all(
@@ -2386,9 +2264,8 @@ async function scan() {
     );
     renderCards(enriched);
     patchArMarkersWithCovers(enriched);
-    expandResultsDrawer();
-    setStatus(`${enriched.length} livre(s) — fiches ci-dessous`);
-    setHint('Touchez un livre ou un cadre orange pour ouvrir la fiche (bio auteur, autres titres…).');
+    setStatus(`${enriched.length} livre(s) — voir la liste`);
+    setHint('Touchez un livre dans la liste ou un cadre sur la photo pour ouvrir la fiche (bio auteur, autres titres…).');
 
   } catch (err) {
     showError(err.message || String(err));
@@ -2402,18 +2279,6 @@ async function scan() {
     clearScanPixelLayer();
     scanBtn.disabled = false;
   }
-}
-
-function expandResultsDrawer() {
-  setResultsExpanded(true);
-}
-
-function setResultsExpanded(expanded) {
-  if (!resultsPanel || !resultsDrawerToggle) return;
-  resultsPanel.classList.toggle('collapsed', !expanded);
-  resultsDrawerToggle.setAttribute('aria-expanded', String(expanded));
-  applySplitLayout();
-  scheduleArReflow();
 }
 
 const CONF_DOT = { high: '#4ade80', medium: '#fbbf24', low: '#9ca3af' };
@@ -2746,7 +2611,7 @@ function stars(n) {
   return '★'.repeat(r) + '☆'.repeat(5 - r);
 }
 
-function renderCards(books) {
+function renderCards(books, revealResults = true) {
   cachedEnrichedBooks = books;
   resultsList.innerHTML = '';
   resultsLabel.textContent = `${books.length} livre(s)`;
@@ -2803,7 +2668,10 @@ function renderCards(books) {
         </div>
       </article>`);
   });
-  applySplitLayout();
+  if (revealResults) {
+    showResultsScreen();
+    scrollPanelToTop(resultsList, true);
+  }
   scheduleArReflow();
 }
 
@@ -2860,11 +2728,6 @@ document.addEventListener('keydown', e => {
     closeSettings();
     return;
   }
-  if (isSearchScreenActive()) {
-    showScanScreen();
-    setAppDockTab('scan');
-    return;
-  }
   const sheet = $('book-sheet');
   if (sheet && !sheet.classList.contains('hidden')) {
     if (bookSheetHistoryStack.length) {
@@ -2872,6 +2735,16 @@ document.addEventListener('keydown', e => {
       return;
     }
     closeBookSheet();
+    return;
+  }
+  if (isResultsScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
+    return;
+  }
+  if (isSearchScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
     return;
   }
 });
@@ -2890,7 +2763,6 @@ function showSkeletons(n = 3) {
         <div class="sk" style="height:11px;width:75%;border-radius:5px"></div>
       </div>
     </div>`).join('');
-  applySplitLayout();
   scheduleArReflow();
 }
 
@@ -2898,20 +2770,19 @@ function showEmpty(msg) {
   resultsList.innerHTML = `<p class="empty-hint">${esc(msg)}</p>`;
   resultsLabel.textContent = 'Aucun résultat';
   resultsPanel.classList.remove('has-results');
-  applySplitLayout();
+  showScanScreen();
   scheduleArReflow();
 }
 
 function showError(msg) {
   resultsPanel.classList.add('has-results');
-  expandResultsDrawer();
   resultsLabel.textContent = 'Erreur';
   resultsList.innerHTML = `
     <div class="error-box">
       <p class="empty-hint error-msg">${esc(msg)}</p>
       <button type="button" class="btn-retry" id="retry-scan-btn">Réessayer</button>
     </div>`;
-  applySplitLayout();
+  showResultsScreen();
   scheduleArReflow();
 }
 
@@ -3015,6 +2886,7 @@ function esc(s) {
 function onMainButtonClick() {
   if (busy) return;
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   if (!uploadedImg) {
     fileInputCamera?.click();
@@ -3024,13 +2896,9 @@ function onMainButtonClick() {
 }
 
 scanBtn.addEventListener('click', onMainButtonClick);
-resultsDrawerToggle?.addEventListener('click', () => {
-  const wasCollapsed = resultsPanel.classList.contains('collapsed');
-  setResultsExpanded(wasCollapsed);
-  if (!wasCollapsed && appDockTab === 'history') setAppDockTab('scan');
-});
 uploadBtn.addEventListener('click', () => {
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   fileInputGallery?.click();
 });
@@ -3040,6 +2908,7 @@ previewBack.addEventListener('click', resetPhotoState);
 viewportEmpty?.addEventListener('click', () => {
   if (busy) return;
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   fileInputCamera?.click();
 });
@@ -3083,7 +2952,6 @@ arLayer.addEventListener('click', e => {
   const m = e.target.closest('.ar-marker');
   if (!m) return;
   const idx = parseInt(m.dataset.bookIdx, 10);
-  expandResultsDrawer();
   if (Number.isFinite(idx) && cachedEnrichedBooks[idx]) openBookSheet(idx);
 });
 
@@ -3093,17 +2961,14 @@ arResizeRo.observe(arLayer);
 arResizeRo.observe(previewEl);
 
 window.visualViewport?.addEventListener('resize', () => {
-  applySplitLayout();
   scheduleArReflow();
 });
 window.addEventListener('orientationchange', () => {
   setTimeout(() => {
-    applySplitLayout();
     scheduleArReflow();
   }, 180);
 });
 
-initSplitPaneResize();
 
 function initPhotoZoomHandlers() {
   if (!zoomRoot || !zoomPan || !zoomScaler) return;
@@ -3232,6 +3097,7 @@ document.addEventListener('paste', e => {
   const item = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));
   if (item) {
     if (isSearchScreenActive()) showScanScreen();
+    if (isResultsScreenActive()) showScanScreen();
     setAppDockTab('scan');
     loadFile(item.getAsFile());
   }
@@ -3414,4 +3280,5 @@ window.addEventListener('storage', e => {
   refreshWishlistDependentUi();
 });
 
+syncFlowInert('scan');
 setAppDockTab('scan');

@@ -85,7 +85,7 @@ body {
   padding-right: max(0px, env(safe-area-inset-right));
 }
 
-/* ── Zone haut (caméra / contrôles) + bas (résultats), séparateur redimensionnable ─ */
+/* ── Colonne principale : écrans scan / recherche / liste résultats (un à la fois dans split-top) ─ */
 .split-root {
   display: flex;
   flex-direction: column;
@@ -94,72 +94,43 @@ body {
   overflow: hidden;
 }
 .split-top {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
-.screen-scan {
+
+/* Écrans empilés : fondu entre scan, recherche catalogue et liste résultats */
+.split-flow-layer {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
 }
+.split-flow-layer.split-flow-layer--active {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-flow-layer {
+    transition-duration: 0.06s;
+  }
+}
+
 .split-top #viewport {
   flex: 1 1 auto;
   min-height: 0;
-}
-.split-gutter {
-  flex-shrink: 0;
-  /* Zone de préhension tactile : cible 44×44 (DESIGN-SYSTEM — SC 2.5.5 pour actions principales). */
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  margin: 0;
-  box-sizing: border-box;
-  cursor: ns-resize;
-  touch-action: none;
-  -webkit-user-select: none;
-  user-select: none;
-  background: var(--surf2);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 4;
-}
-.split-gutter::after {
-  content: '';
-  width: 48px;
-  height: 5px;
-  border-radius: 3px;
-  background: var(--muted);
-  opacity: 0.45;
-}
-.split-gutter:hover::after,
-.split-gutter:focus-visible::after {
-  opacity: 0.75;
-}
-.split-gutter:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.split-root.split-gutter--disabled .split-gutter {
-  cursor: not-allowed;
-  opacity: 0.5;
-  pointer-events: none;
-}
-.split-root.split-gutter-active .split-gutter {
-  background: var(--surf3);
-}
-
-.split-root.split-root--search .split-gutter,
-.split-root.split-root--search #results {
-  display: none !important;
 }
 
 /* ── Recherche titre / auteur (Google Books) ───────────────────────────────── */
@@ -171,9 +142,48 @@ body {
   background: var(--bg);
   overflow: hidden;
 }
-.screen-search.hidden {
-  display: none !important;
+
+.screen-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
 }
+.scan-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+.scan-results.has-results {
+  flex: 1 1 auto;
+}
+.results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.results-toolbar-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: 'Syne', var(--sheet-ui), system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .search-screen-inner {
   flex: 1 1 auto;
   min-height: 0;
@@ -1461,89 +1471,12 @@ header {
   outline-offset: 2px;
 }
 
-/* ── Tiroir résultats ─────────────────────────────────────────────────────── */
-.results-drawer {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  overflow: hidden;
-}
-.results-drawer.has-results {
-  flex: 1 1 42%;
-  max-height: min(58vh, 520px);
-}
-.results-drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 10px 6px 12px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-.results-drawer-toggle {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 10px 8px;
-  background: transparent;
-  border: none;
-  color: var(--text);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  border-radius: var(--r-sm);
-}
-.results-drawer-toggle:active {
-  background: var(--surf2);
-}
-.drawer-grip {
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--muted);
-  opacity: 0.35;
-  flex-shrink: 0;
-}
-.results-drawer-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  text-align: center;
-}
-.drawer-chevron {
-  font-size: 14px;
-  color: var(--muted);
-  line-height: 1;
-  transition: transform 0.25s ease;
-}
-.results-drawer.collapsed .drawer-chevron {
-  transform: rotate(-180deg);
-}
-
 .results-panel-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
-}
-.results-drawer.collapsed .results-panel-body {
-  max-height: 0 !important;
-  flex: 0 0 auto;
-  opacity: 0;
-  pointer-events: none;
 }
 
 .ai-disclaimer {
@@ -3303,27 +3236,6 @@ button.sheet-sim-open:hover {
     display: none;
   }
 
-  .results-drawer-head {
-    padding: 4px 8px 4px 10px;
-  }
-  .results-drawer-toggle {
-    padding: 8px 6px;
-    gap: 8px;
-  }
-  .drawer-grip {
-    width: 32px;
-  }
-  .results-drawer-title {
-    font-size: 10px;
-    letter-spacing: 0.05em;
-  }
-
-  /* Plus d’espace pour l’image : le tiroir prend moins de hauteur */
-  .results-drawer.has-results {
-    flex: 1 1 28%;
-    max-height: min(36vh, 400px);
-  }
-
   .book-card {
     padding: 10px 10px 8px;
   }
@@ -3347,21 +3259,6 @@ button.sheet-sim-open:hover {
     margin-left: 6px;
     margin-right: 6px;
   }
-  .results-drawer.has-results {
-    flex: 1 1 24%;
-    max-height: min(32vh, 340px);
-  }
-}
-
-/* Répartition manuelle (JS) : priorité sur flex / max-height du tiroir */
-.split-root.split-custom .split-top {
-  flex: 0 0 auto !important;
-  overflow: hidden;
-}
-.split-root.split-custom .results-drawer,
-.split-root.split-custom .results-drawer.has-results {
-  flex: 0 0 auto !important;
-  max-height: none !important;
 }
 
 .sheet-author-card {
@@ -3757,8 +3654,6 @@ button.sheet-mini-book:hover {
   .book-sheet-backdrop,
   .book-sheet-panel,
   .book-sheet-close,
-  .split-region,
-  .split-gutter,
   .icon-btn,
   .side-btn,
   .main-ring,
