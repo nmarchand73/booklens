@@ -60,17 +60,11 @@
       </svg>
       <span class="logo-wordmark">BookLens</span>
     </span>
-    <div class="header-actions">
-      <button type="button" id="wishlist-btn" class="icon-btn wishlist-header-btn" title="Ma liste" aria-label="Ma liste">
-        <span class="wishlist-header-ico" aria-hidden="true">♥</span>
-        <span id="wishlist-badge" class="wishlist-badge" hidden>0</span>
-      </button>
-      <button type="button" id="settings-btn" class="icon-btn" title="Paramètres" aria-label="Ouvrir les paramètres">⚙️</button>
-    </div>
   </header>
 
   <div id="split-root" class="split-root">
     <div id="split-top" class="split-top">
+  <div id="screen-scan" class="screen-scan">
   <div id="viewport">
     <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
       <div class="viewport-empty-inner">
@@ -127,7 +121,7 @@
   </div>
 
   <div id="controls">
-    <button type="button" id="upload-btn" class="side-btn" title="Photothèque, pellicule ou tout fichier image (upload)" aria-label="Importer depuis la photothèque ou un fichier">
+    <button type="button" id="upload-btn" class="side-btn controls-import-only" title="Photothèque, pellicule ou tout fichier image (upload)" aria-label="Importer depuis la photothèque ou un fichier">
       <span class="btn-icon" aria-hidden="true">
         <svg class="ctrl-svg ctrl-svg--md" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.75"/>
@@ -138,23 +132,113 @@
       <span class="btn-label">Importer</span>
       <span class="btn-sublabel">photos ou fichier</span>
     </button>
-    <div class="main-btn-wrap">
-      <button type="button" id="scan-btn" class="main-btn" title="Appareil photo, ou envoyer l’image choisie" aria-label="Appareil photo ou envoyer l’analyse">
-        <span class="main-ring" aria-hidden="true">
-          <svg class="ctrl-svg main-ico main-ico--camera" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M4 9h2.5l1.2-2h8.6l1.2 2H20a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2v-7a2 2 0 012-2z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
-            <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.75"/>
-          </svg>
-          <svg class="ctrl-svg main-ico main-ico--send hidden" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M22 2L11 13" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>
+  </div>
+  </div><!-- /screen-scan -->
+
+  <div id="screen-search" class="screen-search hidden" aria-hidden="true">
+    <div class="search-screen-inner">
+      <div class="search-panel-head">
+        <p class="search-panel-kicker">Catalogue</p>
+        <h2 class="search-panel-title">Rechercher un livre</h2>
+        <p class="search-panel-lead">Titre, auteur ou quelques mots-clés — les résultats viennent de Google&nbsp;Books (couverture, résumé). Les critiques et le profil de lecture s’enrichissent avec votre clé IA, comme après un scan.</p>
+      </div>
+      <div class="search-bar-block">
+        <label class="search-label" for="book-search-input">Titre ou auteur</label>
+        <div class="search-input-shell">
+          <span class="search-input-leading" aria-hidden="true">
+            <svg class="search-input-ico" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.75"/>
+              <path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <input type="search" id="book-search-input" class="search-input" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Ex. Annie Ernaux, Dune, 1984…">
+          <button type="button" id="search-clear-btn" class="search-clear-btn hidden" aria-label="Effacer la recherche">Effacer</button>
+        </div>
+        <button type="button" id="search-submit-btn" class="search-submit-btn">Lancer la recherche</button>
+      </div>
+      <div id="search-scroll" class="search-scroll">
+        <div id="search-empty" class="search-empty">
+          <div class="search-empty-visual" aria-hidden="true">
+            <svg class="search-empty-svg" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="search-empty-grad" x1="20" y1="100" x2="100" y2="16" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#5eead4"/>
+                  <stop offset="0.35" stop-color="#7dd3fc"/>
+                  <stop offset="0.7" stop-color="#fcd34d"/>
+                  <stop offset="1" stop-color="#f97316"/>
+                </linearGradient>
+              </defs>
+              <circle cx="60" cy="60" r="52" stroke="url(#search-empty-grad)" stroke-width="2" opacity="0.35"/>
+              <circle cx="54" cy="54" r="22" stroke="url(#search-empty-grad)" stroke-width="2.5"/>
+              <path d="M70 70l20 20" stroke="url(#search-empty-grad)" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3 class="search-empty-title">Par où commencer ?</h3>
+          <p class="search-empty-text">Tapez un <strong>titre</strong>, un <strong>nom d’auteur</strong> ou les deux. Vous pouvez aussi choisir une suggestion ci-dessous.</p>
+        </div>
+        <div id="search-recent" class="search-recent hidden" aria-label="Recherches récentes"></div>
+        <p id="search-hint" class="search-hint hidden" role="status" aria-live="polite"></p>
+        <div id="search-results-list" class="search-results-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <nav id="app-dock" class="app-dock" aria-label="Navigation principale">
+    <div class="app-dock-inner">
+      <button type="button" id="dock-history-btn" class="dock-item dock-item--tab" title="Voir les résultats du scan" aria-label="Historique des résultats">
+        <span class="dock-ico" aria-hidden="true">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 8v5l3 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
           </svg>
         </span>
+        <span class="dock-label">Historique</span>
       </button>
-      <span id="main-caption" class="main-caption">Photo</span>
+      <button type="button" id="dock-search-btn" class="dock-item dock-item--tab" title="Recherche par titre ou auteur" aria-label="Recherche par titre ou auteur">
+        <span class="dock-ico" aria-hidden="true">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.75"/>
+            <path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="dock-label">Recherche</span>
+      </button>
+      <div class="dock-fab-wrap">
+        <button type="button" id="scan-btn" class="main-btn dock-fab" title="Appareil photo, ou envoyer l’image choisie" aria-label="Appareil photo ou envoyer l’analyse">
+          <span class="main-ring" aria-hidden="true">
+            <svg class="ctrl-svg main-ico main-ico--camera" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M4 9h2.5l1.2-2h8.6l1.2 2H20a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2v-7a2 2 0 012-2z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+              <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.75"/>
+            </svg>
+            <svg class="ctrl-svg main-ico main-ico--send hidden" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M22 2L11 13" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </button>
+        <span id="main-caption" class="main-caption dock-fab-caption">Photo</span>
+      </div>
+      <button type="button" id="wishlist-btn" class="dock-item dock-item--tab wishlist-header-btn" title="Ma liste" aria-label="Ma liste">
+        <span class="dock-ico dock-ico--bookmark" aria-hidden="true">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M6 4h12v16l-6-3.5L6 20V4z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span id="wishlist-badge" class="wishlist-badge" hidden>0</span>
+        <span class="dock-label">Signets</span>
+      </button>
+      <button type="button" id="settings-btn" class="dock-item dock-item--tab" title="Paramètres" aria-label="Ouvrir les paramètres">
+        <span class="dock-ico" aria-hidden="true">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.75"/>
+            <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="dock-label">Réglages</span>
+      </button>
     </div>
-    <div class="controls-spacer" aria-hidden="true"></div>
-  </div>
+    <div class="app-dock-home-indicator" aria-hidden="true"></div>
+  </nav>
     </div>
 
   <div
