@@ -183,6 +183,26 @@
     </div>
   </div>
 
+  <div id="screen-results" class="screen-results hidden" aria-hidden="true">
+    <div id="results" class="scan-results" aria-label="Fiches livres">
+      <div class="results-toolbar">
+        <p id="results-label" class="results-toolbar-title">Aucun résultat</p>
+        <button type="button" id="clear-btn" class="btn-text-clear">Effacer</button>
+      </div>
+      <div id="results-panel-body" class="results-panel-body">
+        <div id="results-list">
+          <p class="empty-hint">Envoyez une photo de rayon pour découvrir les critiques</p>
+        </div>
+        <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /split-top -->
+
+  <input type="file" id="file-input-camera" accept="image/*" capture="environment" class="hidden">
+  <input type="file" id="file-input-gallery" accept="image/*" class="hidden">
+
   <nav id="app-dock" class="app-dock" aria-label="Navigation principale">
     <div class="app-dock-inner">
       <button type="button" id="dock-history-btn" class="dock-item dock-item--tab" title="Voir les résultats du scan" aria-label="Historique des résultats">
@@ -239,39 +259,7 @@
     </div>
     <div class="app-dock-home-indicator" aria-hidden="true"></div>
   </nav>
-    </div>
-
-  <div
-    id="split-gutter"
-    class="split-gutter"
-    role="separator"
-    aria-orientation="horizontal"
-    aria-label="Redimensionner la zone photo et la zone résultats. Flèche bas : plus de résultats ; flèche haut : plus de photo."
-    aria-valuemin="8"
-    aria-valuemax="92"
-    tabindex="0"
-  ></div>
-
-  <input type="file" id="file-input-camera" accept="image/*" capture="environment" class="hidden">
-  <input type="file" id="file-input-gallery" accept="image/*" class="hidden">
-
-  <div id="results" class="results-drawer" aria-label="Fiches livres">
-    <div class="results-drawer-head">
-      <button type="button" id="results-drawer-toggle" class="results-drawer-toggle" aria-expanded="true" aria-controls="results-panel-body">
-        <span class="drawer-grip" aria-hidden="true"></span>
-        <span id="results-label" class="results-drawer-title">Aucun résultat</span>
-        <span class="drawer-chevron" aria-hidden="true">⌄</span>
-      </button>
-      <button type="button" id="clear-btn" class="btn-text-clear">Effacer</button>
-    </div>
-    <div id="results-panel-body" class="results-panel-body">
-      <div id="results-list">
-        <p class="empty-hint">Envoyez une photo de rayon pour découvrir les critiques</p>
-      </div>
-      <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
-    </div>
-  </div>
-  </div>
+  </div><!-- /split-root -->
 </div>
 
 <!-- Fiche livre plein écran (mobile) -->
