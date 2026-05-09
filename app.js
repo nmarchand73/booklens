@@ -2860,11 +2860,6 @@ document.addEventListener('keydown', e => {
     closeSettings();
     return;
   }
-  if (isSearchScreenActive()) {
-    showScanScreen();
-    setAppDockTab('scan');
-    return;
-  }
   const sheet = $('book-sheet');
   if (sheet && !sheet.classList.contains('hidden')) {
     if (bookSheetHistoryStack.length) {
@@ -2872,6 +2867,11 @@ document.addEventListener('keydown', e => {
       return;
     }
     closeBookSheet();
+    return;
+  }
+  if (isSearchScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
     return;
   }
 });
