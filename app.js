@@ -318,6 +318,7 @@ function openSearchScreen() {
   setAppDockTab('search');
   renderSearchRecentPanel();
   updateSearchChrome();
+  screenSearch?.classList.toggle('screen-search--has-results', !!(cachedSearchBooks?.length));
   scrollPanelToTop($('search-scroll'), true);
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
@@ -2994,6 +2995,7 @@ function renderSearchResultCards(books) {
         </div>
       </article>`);
   });
+  screenSearch?.classList.toggle('screen-search--has-results', books.length > 0);
 }
 
 function scheduleBookSearchDebounced() {
