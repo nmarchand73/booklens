@@ -29,8 +29,10 @@ Open **http://localhost:8080** — any static file server works the same way.
 - A modern browser with camera access (or use a file upload if you prefer).
 - In **Settings**, choose a provider and paste the matching API key:
   - **[Anthropic](https://console.anthropic.com/settings/keys)** (Claude) — recommended default; browser calls are explicitly allowed by Anthropic for this API.
-  - **[OpenAI](https://platform.openai.com/api-keys)** (e.g. GPT-4o / GPT-4o mini) — **CORS**: some browsers block `https://api.openai.com` from `file://` or certain static origins. If requests fail, serve this folder over **http://localhost** (as above) or use your own tiny proxy.
-  - **[Google AI Studio](https://aistudio.google.com/apikey)** (Gemini) — key in the URL query for `generateContent`; keep the page on HTTPS or localhost in production habits.
+  - **[OpenAI](https://platform.openai.com/api-keys)** — modèles récents type **GPT-5.4 mini / nano / 5.5** (vision + texte ; voir [choix du modèle](https://platform.openai.com/docs/models)). **CORS** : depuis `file://` ou certains hôtes statiques, le navigateur peut bloquer `api.openai.com` — servez la page en **http://localhost** ou utilisez un petit proxy.
+  - **[Google AI Studio](https://aistudio.google.com/apikey)** (Gemini) — repères perf/prix sur les classements [Artificial Analysis](https://artificialanalysis.ai/) ; IDs API **Gemini 3 (preview)** ou **2.5** selon [la doc modèles](https://ai.google.dev/gemini-api/docs/models). La clé est passée en query sur `generateContent`.
+
+Les listes déroulantes suivent ces docs (et évoluent avec les API). Pour comparer intelligence / vitesse / prix entre labos : [artificialanalysis.ai](https://artificialanalysis.ai/).
 
 Model names are persisted **per provider** in `localStorage` (`bl_provider`, `bl_key`, `bl_model_<provider>`).
 

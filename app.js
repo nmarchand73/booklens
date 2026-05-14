@@ -9,30 +9,35 @@ const IMAGE_MAX_W = { normal: 1280, fast: 900 };
 const JPEG_Q      = { normal: 0.85, fast: 0.72 };
 const MAX_TOKENS  = { normal: 1680, fast: 1020 };
 
+/** Modèles proposés : IDs stables côté API + lecture croisée perf/prix (repères [Artificial Analysis](https://artificialanalysis.ai/), doc OpenAI « Choosing a model », doc Google Gemini 3). Les préviews peuvent changer de nom — voir consoles fournisseurs. */
+
 /** @typedef {'anthropic'|'openai'|'gemini'} LlmProvider */
 const LLM_PROVIDERS = /** @type {const} */ (['anthropic', 'openai', 'gemini']);
 /** Modèle par défaut si rien de valide en stockage pour ce fournisseur. */
 const DEFAULT_LLM_MODEL = /** @type {Record<LlmProvider, string>} */ ({
   anthropic: 'claude-sonnet-4-6',
-  openai: 'gpt-4o-mini',
-  gemini: 'gemini-2.0-flash',
+  openai: 'gpt-5.4-mini',
+  gemini: 'gemini-2.5-flash',
 });
 /** Options affichées dans Paramètres (valeur API, libellé UI). */
 const LLM_MODEL_OPTIONS = /** @type {Record<LlmProvider, [string, string][]>} */ ({
   anthropic: [
-    ['claude-haiku-4-5-20251001', 'Haiku 4.5 — rapide & économique'],
-    ['claude-sonnet-4-6', 'Sonnet 4.6'],
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5 — le plus rapide / le moins cher'],
+    ['claude-sonnet-4-6', 'Sonnet 4.6 — équilibre qualité · vitesse · coût'],
+    ['claude-opus-4-7', 'Opus 4.7 — qualité max (classements type Artificial Analysis)'],
   ],
   openai: [
-    ['gpt-4o-mini', 'GPT-4o mini'],
-    ['gpt-4o', 'GPT-4o'],
-    ['gpt-4.1-mini', 'GPT-4.1 mini'],
-    ['gpt-4.1', 'GPT-4.1'],
+    ['gpt-5.4-nano', 'GPT-5.4 nano — latence & coût mini (doc OpenAI)'],
+    ['gpt-5.4-mini', 'GPT-5.4 mini — rapide & bon marché (défaut conseillé)'],
+    ['gpt-5.5', 'GPT-5.5 — flagship raisonnement & vision'],
+    ['gpt-4o-mini', 'GPT-4o mini — fallback / budgets serrés'],
   ],
   gemini: [
-    ['gemini-2.0-flash', 'Gemini 2.0 Flash'],
-    ['gemini-2.5-flash', 'Gemini 2.5 Flash'],
-    ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
+    ['gemini-3-flash-preview', 'Gemini 3 Flash (preview) — très rapide (repères Artificial Analysis)'],
+    ['gemini-3.1-flash-lite-preview', 'Gemini 3.1 Flash-Lite (preview) — excellent rapport coût / vélocité'],
+    ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (preview) — qualité max'],
+    ['gemini-2.5-flash', 'Gemini 2.5 Flash — stable, vision'],
+    ['gemini-2.5-pro', 'Gemini 2.5 Pro — qualité sans preview'],
   ],
 });
 
