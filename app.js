@@ -3682,12 +3682,93 @@ window.addEventListener('storage', e => {
   refreshWishlistDependentUi();
 });
 
+/** Raccourcis PWA / liens profonds : `?bl_tab=scan|search|history|settings|wishlist` */
+function applyPwaLaunchParamsFromUrl() {
+  let params;
+  try {
+    params = new URLSearchParams(window.location.search || '');
+  } catch {
+    return;
+  }
+  const tab = (params.get('bl_tab') || '').toLowerCase();
+  if (!tab) return;
+  if (tab === 'search') openSearchScreen();
+  else if (tab === 'history') openHistoryFromDock();
+  else if (tab === 'settings') openSettings();
+  else if (tab === 'wishlist' || tab === 'bookmark' || tab === 'liste') {
+    closeSettings();
+    openWishlistModal();
+  } else if (tab === 'scan') {
+    closeWishlistModal();
+    closeSettings();
+    showScanScreen();
+    setAppDockTab('scan');
+  }
+  params.delete('bl_tab');
+  const q = params.toString();
+  const path = window.location.pathname || '/';
+  try {
+    history.replaceState(null, '', q ? `${path}?${q}` : path);
+  } catch {
+    /* noop */
+  }
+}
+
+function hidePwaUpdateBar() {
+  $('pwa-update-bar')?.classList.add('hidden');
+}
+
+function showPwaUpdateBar() {
+  $('pwa-update-bar')?.classList.remove('hidden');
+}
+
+function wirePwaServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  const applyBtn = $('pwa-update-apply');
+  const dismissBtn = $('pwa-update-dismiss');
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!sessionStorage.getItem('bl_sw_reload_pending')) return;
+    sessionStorage.removeItem('bl_sw_reload_pending');
+    window.location.reload();
+  });
+
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register(new URL('./sw.js', window.location.href).href)
+      .then((reg) => {
+        const wireWaiting = () => {
+          if (reg.waiting) showPwaUpdateBar();
+          else hidePwaUpdateBar();
+        };
+        wireWaiting();
+        reg.addEventListener('updatefound', () => {
+          const inst = reg.installing;
+          inst?.addEventListener('statechange', () => {
+            if (inst.state === 'installed') wireWaiting();
+          });
+        });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') void reg.update();
+        });
+        applyBtn?.addEventListener('click', () => {
+          if (!reg.waiting) return;
+          try {
+            sessionStorage.setItem('bl_sw_reload_pending', '1');
+          } catch {
+            /* noop */
+          }
+          reg.waiting.postMessage('SKIP_WAITING');
+        });
+        dismissBtn?.addEventListener('click', () => hidePwaUpdateBar());
+      })
+      .catch(() => {});
+  });
+}
+
 syncFlowInert('scan');
 setAppDockTab('scan');
 syncSettingsModalFromState();
-
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register(new URL('./sw.js', window.location.href).href).catch(() => {});
-  });
-}
+applyPwaLaunchParamsFromUrl();
+wirePwaServiceWorker();

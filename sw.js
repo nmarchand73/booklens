@@ -1,7 +1,14 @@
 'use strict';
 
 /** Incrémenter quand index.html, style.css, app.js ou icônes shell changent. */
-const CACHE = 'booklens-shell-v1';
+const CACHE = 'booklens-shell-v2';
+
+self.addEventListener('message', (event) => {
+  const d = event.data;
+  if (d === 'SKIP_WAITING' || (d && typeof d === 'object' && d.type === 'SKIP_WAITING')) {
+    self.skipWaiting();
+  }
+});
 
 function coreUrls() {
   const r = self.location;
@@ -20,8 +27,7 @@ self.addEventListener('install', (event) => {
     caches
       .open(CACHE)
       .then((cache) => cache.addAll(coreUrls()))
-      .then(() => self.skipWaiting())
-      .catch(() => self.skipWaiting())
+      .catch(() => {})
   );
 });
 

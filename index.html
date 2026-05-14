@@ -25,6 +25,12 @@
 </head>
 <body>
 
+<div id="pwa-update-bar" class="pwa-update-bar hidden" role="status" aria-live="polite">
+  <span class="pwa-update-bar-text">Une nouvelle version de BookLens est prête.</span>
+  <button type="button" id="pwa-update-apply" class="pwa-update-bar-btn">Mettre à jour</button>
+  <button type="button" id="pwa-update-dismiss" class="pwa-update-bar-dismiss" aria-label="Plus tard">×</button>
+</div>
+
 <div id="settings-modal" class="modal hidden">
   <div class="modal-backdrop" id="modal-backdrop"></div>
   <div class="modal-sheet modal-sheet--settings">
