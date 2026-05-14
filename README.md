@@ -22,6 +22,13 @@ python -m http.server 8080
 
 Open **http://localhost:8080** — any static file server works the same way.
 
+### PWA (première couche)
+
+- Fichiers : [`site.webmanifest`](site.webmanifest), [`sw.js`](sw.js), dossier [`icons/`](icons/) (192 + 512 pour l’invite « Ajouter à l’écran d’accueil »).
+- Le **service worker** met en cache le **shell** (`index.html`, `style.css`, `app.js`, manifest, icônes) pour un chargement plus rapide et une **page d’accueil hors ligne** limitée. Les **APIs** (LLM, Open Library, Wikipedia, Google Books, polices) restent **en ligne**.
+- Le SW n’est enregistré que sur **`https://`** ou **`http://localhost`** (pas sur `file://`).
+- Le déploiement **GitHub Pages** (`.github/workflows/pages.yml`) copie `site.webmanifest`, `sw.js` et `icons/` avec le reste du bundle.
+
 ---
 
 ## What you need

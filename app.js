@@ -3685,3 +3685,9 @@ window.addEventListener('storage', e => {
 syncFlowInert('scan');
 setAppDockTab('scan');
 syncSettingsModalFromState();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(new URL('./sw.js', window.location.href).href).catch(() => {});
+  });
+}

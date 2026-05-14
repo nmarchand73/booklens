@@ -39,8 +39,8 @@ jobs:
           sed -e "s|href=\"style.css\"|href=\"style.css?v=${CACHE_BUST}\"|g" \
               -e "s|src=\"app.js\"|src=\"app.js?v=${CACHE_BUST}\"|g" \
               index.html > _site/index.html
-          cp style.css app.js _site/
-          cp -r img _site/
+          cp style.css app.js site.webmanifest sw.js _site/
+          cp -r img icons _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:
