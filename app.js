@@ -1,18 +1,69 @@
 'use strict';
 
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const GBOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
 
 const IMAGE_MAX_W = { normal: 1280, fast: 900 };
 const JPEG_Q      = { normal: 0.85, fast: 0.72 };
 const MAX_TOKENS  = { normal: 1680, fast: 1020 };
 
-let apiKey      = localStorage.getItem('bl_key')      || '';
-let model       = localStorage.getItem('bl_model')    || 'claude-sonnet-4-6';
+/** @typedef {'anthropic'|'openai'|'gemini'} LlmProvider */
+const LLM_PROVIDERS = /** @type {const} */ (['anthropic', 'openai', 'gemini']);
+/** Modèle par défaut si rien de valide en stockage pour ce fournisseur. */
+const DEFAULT_LLM_MODEL = /** @type {Record<LlmProvider, string>} */ ({
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-4o-mini',
+  gemini: 'gemini-2.0-flash',
+});
+/** Options affichées dans Paramètres (valeur API, libellé UI). */
+const LLM_MODEL_OPTIONS = /** @type {Record<LlmProvider, [string, string][]>} */ ({
+  anthropic: [
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5 — rapide & économique'],
+    ['claude-sonnet-4-6', 'Sonnet 4.6'],
+  ],
+  openai: [
+    ['gpt-4o-mini', 'GPT-4o mini'],
+    ['gpt-4o', 'GPT-4o'],
+    ['gpt-4.1-mini', 'GPT-4.1 mini'],
+    ['gpt-4.1', 'GPT-4.1'],
+  ],
+  gemini: [
+    ['gemini-2.0-flash', 'Gemini 2.0 Flash'],
+    ['gemini-2.5-flash', 'Gemini 2.5 Flash'],
+    ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
+  ],
+});
+
+function llmModelStorageKey(provider) {
+  return `bl_model_${provider}`;
+}
+
+function loadLlmProvider() {
+  const v = localStorage.getItem('bl_provider');
+  return LLM_PROVIDERS.includes(/** @type {any} */ (v)) ? /** @type {LlmProvider} */ (v) : 'anthropic';
+}
+
+/** @type {LlmProvider} */
+let llmProvider = loadLlmProvider();
+let apiKey = localStorage.getItem('bl_key') || '';
+
+function pickModelForProvider(provider) {
+  const allowed = new Set(LLM_MODEL_OPTIONS[provider].map(x => x[0]));
+  const legacy = localStorage.getItem('bl_model');
+  const scoped = localStorage.getItem(llmModelStorageKey(provider));
+  const cand = scoped || legacy || DEFAULT_LLM_MODEL[provider];
+  if (allowed.has(cand)) return cand;
+  if (provider === 'anthropic' && typeof cand === 'string' && cand.startsWith('claude-')) return cand;
+  return DEFAULT_LLM_MODEL[provider];
+}
+
+let model = pickModelForProvider(llmProvider);
 let fastMode    = localStorage.getItem('bl_fast') === '1';
 let busy        = false;
 let uploadedImg = null;
-/** Dimensions de la frame réellement envoyée à Claude (canvas). */
+/** Dimensions de la frame réellement envoyée au modèle (canvas). */
 let lastCaptureSize = { w: 0, h: 0 };
 /** Dimensions natives de la photo source — repère pour object-fit: contain (RA). */
 let lastSourceSize = { w: 0, h: 0 };
@@ -146,6 +197,11 @@ const settingsBtn  = $('settings-btn');
 const modal        = $('settings-modal');
 const backdrop     = $('modal-backdrop');
 const apiKeyIn     = $('api-key-input');
+const apiKeyLabel  = $('api-key-label');
+const apiKeyHelp   = $('api-key-help');
+const providerFieldset = $('provider-fieldset');
+const keyPortalLink = $('key-portal-link');
+const cancelSettingsBtn = $('cancel-settings-btn');
 const modelSel     = $('model-select');
 const fastModeCheck = $('fast-mode-check');
 const saveBtn      = $('save-settings-btn');
@@ -593,8 +649,8 @@ function refreshScanPixelLayer() {
   scanPixelRaf = requestAnimationFrame(scanPixelTick);
 }
 
-// ── Claude vision + critique ──────────────────────────────────────────────────
-// Claude identifies books AND provides critiques in a single call.
+// ── Vision + critique (Anthropic / OpenAI / Gemini) ───────────────────────────
+// Un seul appel : identification des livres + critiques JSON.
 const SYSTEM_PROMPT = `Tu es critique littéraire professionnel (conseil de lecture exigeant, ton presse sérieuse). Analyse cette photo de rayons de librairie.
 Pour chaque livre dont tu identifies le titre sur les tranches ou couvertures :
 - title: titre exact tel qu'il apparaît dans l'image
@@ -681,6 +737,303 @@ async function claudeNonStreamRequest(bodyObj) {
   }
   const d = await res.json();
   return d.content?.[0]?.text || '';
+}
+
+async function readOpenAiSse(body, onFirstToken) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let first = true;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const ev = JSON.parse(payload);
+        const piece = ev.choices?.[0]?.delta?.content;
+        if (typeof piece === 'string' && piece.length) {
+          if (first) {
+            first = false;
+            onFirstToken?.();
+          }
+          fullText += piece;
+        }
+      } catch {
+        /* chunk SSE incomplet */
+      }
+    }
+  }
+  return fullText;
+}
+
+function llmJsonErrorMessage(status, raw) {
+  try {
+    const j = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const msg = j.error?.message || j.message;
+    if (msg) return String(msg);
+  } catch { /* ignore */ }
+  return `Erreur API ${status}`;
+}
+
+async function llmCompleteText(systemPrompt, userText, maxOutTokens) {
+  if (llmProvider === 'anthropic') {
+    return claudeNonStreamRequest({
+      model,
+      max_tokens: maxOutTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
+    });
+  }
+  if (llmProvider === 'openai') {
+    const res = await fetch(OPENAI_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxOutTokens,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userText },
+        ],
+      }),
+    });
+    const raw = await res.text();
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+      if (res.status === 429) throw new Error('Quota OpenAI — réessayez plus tard');
+      throw new Error(llmJsonErrorMessage(res.status, raw));
+    }
+    const d = JSON.parse(raw);
+    return d.choices?.[0]?.message?.content || '';
+  }
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userText }] }],
+      generation_config: {
+        max_output_tokens: maxOutTokens,
+        temperature: 0.25,
+      },
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      try {
+        const j = JSON.parse(raw);
+        const m = j.error?.message || '';
+        if (/API\s*key|api\s*key|PERMISSION_DENIED/i.test(String(m))) {
+          throw new Error('Clé API Google AI (Gemini) invalide — vérifiez les paramètres');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Clé API')) throw e;
+      }
+    }
+    if (res.status === 429) throw new Error('Quota Gemini — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+  const d = JSON.parse(raw);
+  const parts = d.candidates?.[0]?.content?.parts;
+  const txt = Array.isArray(parts)
+    ? parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('')
+    : '';
+  if (!txt.trim() && d.promptFeedback?.blockReason) {
+    throw new Error('Réponse Gemini bloquée (sécurité / filtres).');
+  }
+  return txt;
+}
+
+async function callAnthropicVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+
+  const baseBody = {
+    model,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+      { type: 'text', text: userText },
+    ]}],
+  };
+
+  const res = await fetch(CLAUDE_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({ ...baseBody, stream: true }),
+  });
+
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error('Clé API invalide — vérifiez les paramètres');
+    if (res.status === 429) throw new Error('Quota dépassé — réessayez dans quelques secondes');
+    throw new Error(e.error?.message || `Erreur API ${res.status}`);
+  }
+
+  let txt = '';
+  try {
+    txt = await readClaudeSse(res.body, onFirstToken);
+  } catch {
+    txt = '';
+  }
+
+  if (!txt.trim()) {
+    txt = await claudeNonStreamRequest(baseBody);
+  }
+
+  return parseBooksJson(txt);
+}
+
+async function callOpenAiVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+  const dataUrl = `data:image/jpeg;base64,${b64}`;
+
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    stream: true,
+    messages: [
+      { role: 'system', content: system },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: userText },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+  };
+
+  const res = await fetch(OPENAI_CHAT_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const raw = await res.text();
+    if (res.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+    if (res.status === 429) throw new Error('Quota OpenAI — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+
+  let txt = '';
+  try {
+    if (res.body) txt = await readOpenAiSse(res.body, onFirstToken);
+  } catch {
+    txt = '';
+  }
+
+  if (!txt.trim()) {
+    const res2 = await fetch(OPENAI_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ ...body, stream: false }),
+    });
+    const raw2 = await res2.text();
+    if (!res2.ok) {
+      if (res2.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+      throw new Error(llmJsonErrorMessage(res2.status, raw2));
+    }
+    const d2 = JSON.parse(raw2);
+    txt = d2.choices?.[0]?.message?.content || '';
+  }
+
+  return parseBooksJson(txt);
+}
+
+async function callGeminiVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: system }] },
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: userText },
+          { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+        ],
+      }],
+      generation_config: {
+        max_output_tokens: maxTokens,
+        temperature: 0.2,
+      },
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      try {
+        const j = JSON.parse(raw);
+        const m = j.error?.message || '';
+        if (/API\s*key|api\s*key|PERMISSION_DENIED/i.test(String(m))) {
+          throw new Error('Clé API Google AI (Gemini) invalide — vérifiez les paramètres');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Clé API')) throw e;
+      }
+    }
+    if (res.status === 429) throw new Error('Quota Gemini — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+  const d = JSON.parse(raw);
+  const parts = d.candidates?.[0]?.content?.parts;
+  const txt = Array.isArray(parts)
+    ? parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('')
+    : '';
+  if (txt.trim()) onFirstToken?.();
+  if (!txt.trim() && d.promptFeedback?.blockReason) {
+    throw new Error('Réponse Gemini bloquée (sécurité / filtres).');
+  }
+  return parseBooksJson(txt);
+}
+
+async function callVisionBooks(b64, onFirstToken) {
+  if (llmProvider === 'openai') return callOpenAiVisionBooks(b64, onFirstToken);
+  if (llmProvider === 'gemini') return callGeminiVisionBooks(b64, onFirstToken);
+  return callAnthropicVisionBooks(b64, onFirstToken);
 }
 
 function parseBooksJson(txt) {
@@ -906,12 +1259,7 @@ Réponds par un objet JSON avec exactement ces clés :
 - "livres_similaires" : tableau d'exactement 10 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number, "style": string|null} — pour « prolonger la lecture » si on a aimé CE livre : œuvres réelles (titres + auteurs exacts), autres auteurs ou titres comparables quand c'est pertinent. Répartition stricte : exactement 2 livres par décennie sur les 5 dernières décennies calendaires, soit les plages ${decadesLecture} — chaque "annee" doit être l'année de première parution (4 chiffres) qui tombe dans l'une de ces plages uniquement ; 2 titres dans chaque plage, ni plus ni moins si tu peux tenir le quota (sinon complète au mieux avec des titres sûrs). Liste dans l'ordre : les deux titres de la décennie la plus récente d'abord, puis les deux de la suivante, et ainsi de suite jusqu'à la cinquième décennie (aligné sur les plages ci-dessus). style = genre ou registre court en français sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) : situation, protagoniste, conflit ou mystère posé, sans spoiler de résolution ; interdit : répéter "style", clichés « polar haute tension », commentaires sur le suspense ou la qualité littéraire ; ne pas inclure le titre analysé ni sa suite directe évidente
 - "si_similaire" : (optionnel) tableau de chaînes "Titre — Auteur" aligné sur les mêmes livres, ou [] si tu as déjà tout mis dans livres_similaires`;
 
-  const text = await claudeNonStreamRequest({
-    model,
-    max_tokens: MAX_TOKENS_SHEET_DETAIL,
-    system: SYSTEM_SHEET_DETAIL,
-    messages: [{ role: 'user', content: [{ type: 'text', text: userMsg }] }],
-  });
+  const text = await llmCompleteText(SYSTEM_SHEET_DETAIL, userMsg, MAX_TOKENS_SHEET_DETAIL);
   return text;
 }
 
@@ -966,57 +1314,7 @@ function mergeSheetDetailIntoBook(book, d) {
   book._sheetLlmFetched = true;
 }
 
-async function callClaude(b64, onFirstToken) {
-  const fast = fastMode;
-  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
-  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
-  const userText = fast
-    ? 'Liste les livres visibles + JSON demandé.'
-    : 'Identifie les livres et fournis une critique pour chacun.';
-
-  const baseBody = {
-    model,
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-      { type: 'text', text: userText },
-    ]}],
-  };
-
-  const res = await fetch(CLAUDE_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({ ...baseBody, stream: true }),
-  });
-
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    if (res.status === 401) throw new Error('Clé API invalide — vérifiez les paramètres');
-    if (res.status === 429) throw new Error('Quota dépassé — réessayez dans quelques secondes');
-    throw new Error(e.error?.message || `Erreur API ${res.status}`);
-  }
-
-  let txt = '';
-  try {
-    txt = await readClaudeSse(res.body, onFirstToken);
-  } catch {
-    txt = '';
-  }
-
-  if (!txt.trim()) {
-    txt = await claudeNonStreamRequest(baseBody);
-  }
-
-  return parseBooksJson(txt);
-}
-
-// ── Google Books — cover + metadata only (critique comes from Claude) ─────────
+// ── Google Books — cover + metadata only (critique vient du modèle choisi) ─────────
 async function fetchCover(title, author) {
   const q = `intitle:${encodeURIComponent(title)}`
     + (author ? `+inauthor:${encodeURIComponent(author)}` : '');
@@ -2242,8 +2540,8 @@ async function scan() {
   showSkeletons();
 
   try {
-    // Phase 1 — Claude identifie et critique (1 seul appel)
-    const books = await callClaude(b64, () => {
+    // Phase 1 — le modèle identifie et critique (1 seul appel)
+    const books = await callVisionBooks(b64, () => {
       setStatus(fastMode ? 'Réponse en cours (mode rapide)…' : 'Réception du modèle…');
     });
     if (!books.length) {
@@ -2831,13 +3129,97 @@ function resetPhotoState() {
   setHint('');
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Settings ─────────────────────────────────────────────────────────────────-
+function refillModelSelectForProvider(provider) {
+  if (!modelSel) return;
+  modelSel.innerHTML = '';
+  for (const [value, label] of LLM_MODEL_OPTIONS[provider]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    modelSel.appendChild(opt);
+  }
+  const m = pickModelForProvider(provider);
+  let ok = [...modelSel.options].some(o => o.value === m);
+  if (!ok && provider === 'anthropic' && typeof m === 'string' && m.startsWith('claude-')) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = `${m} (stockage)`;
+    modelSel.appendChild(opt);
+    ok = true;
+  }
+  modelSel.value = ok ? m : (modelSel.options[0]?.value ?? DEFAULT_LLM_MODEL[provider]);
+}
+
+function getSettingsProvider() {
+  const el = document.querySelector('input[name="bl-provider"]:checked');
+  const v = el?.value;
+  return LLM_PROVIDERS.includes(/** @type {any} */ (v)) ? /** @type {LlmProvider} */ (v) : 'anthropic';
+}
+
+function setSettingsProvider(p) {
+  document.querySelectorAll('input[name="bl-provider"]').forEach(r => {
+    r.checked = r.value === p;
+  });
+}
+
+function applyProviderSettingsUi(provider) {
+  if (apiKeyLabel) {
+    apiKeyLabel.textContent =
+      provider === 'anthropic' ? 'Clé API Anthropic'
+        : provider === 'openai' ? 'Clé API OpenAI'
+          : 'Clé API Google AI (Gemini)';
+    apiKeyLabel.setAttribute('for', 'api-key-input');
+  }
+  if (keyPortalLink) {
+    if (provider === 'anthropic') {
+      keyPortalLink.href = 'https://console.anthropic.com/settings/keys';
+    } else if (provider === 'openai') {
+      keyPortalLink.href = 'https://platform.openai.com/api-keys';
+    } else {
+      keyPortalLink.href = 'https://aistudio.google.com/apikey';
+    }
+    keyPortalLink.textContent = 'Obtenir une clé →';
+  }
+  if (apiKeyHelp) {
+    if (provider === 'anthropic') {
+      apiKeyHelp.innerHTML = 'Stockée uniquement dans ce navigateur. Besoin d’aide ? <a href="https://docs.anthropic.com/" target="_blank" rel="noopener">Documentation Anthropic</a>';
+    } else if (provider === 'openai') {
+      apiKeyHelp.innerHTML = 'Si les scans échouent depuis <code>file://</code>, lancez un petit serveur local (<code>python -m http.server</code>). <a href="https://platform.openai.com/docs/guides/text-generation" target="_blank" rel="noopener">Aide OpenAI</a>';
+    } else {
+      apiKeyHelp.innerHTML = 'Créez une clé dans Google AI Studio ; elle sert aux appels <code>generateContent</code>. <a href="https://ai.google.dev/gemini-api/docs" target="_blank" rel="noopener">Doc Gemini API</a>';
+    }
+  }
+  if (apiKeyIn) {
+    apiKeyIn.placeholder =
+      provider === 'anthropic' ? 'sk-ant-api03-…'
+        : provider === 'openai' ? 'sk-proj-… ou sk-…'
+          : 'Clé API (AIza…)';
+  }
+}
+
+function syncSettingsModalFromState() {
+  setSettingsProvider(llmProvider);
+  refillModelSelectForProvider(llmProvider);
+  if (modelSel && [...modelSel.options].some(o => o.value === model)) modelSel.value = model;
+  applyProviderSettingsUi(llmProvider);
+}
+
+function discardSettingsChanges() {
+  apiKeyIn.value = apiKey;
+  apiKeyIn.type = 'password';
+  if (toggleKeyBtn) toggleKeyBtn.textContent = 'Afficher';
+  syncSettingsModalFromState();
+  if (fastModeCheck) fastModeCheck.checked = fastMode;
+  closeSettings();
+}
+
 function openSettings() {
   showScanScreen();
   apiKeyIn.value = apiKey;
   apiKeyIn.type = 'password';
   if (toggleKeyBtn) toggleKeyBtn.textContent = 'Afficher';
-  modelSel.value   = model;
+  syncSettingsModalFromState();
   if (fastModeCheck) fastModeCheck.checked = fastMode;
   modal.classList.remove('hidden');
   setAppDockTab('settings');
@@ -2926,17 +3308,32 @@ clearBtn.addEventListener('click', () => {
 settingsBtn.addEventListener('click', openSettings);
 dockHistoryBtn?.addEventListener('click', () => openHistoryFromDock());
 dockSearchBtn?.addEventListener('click', () => openSearchScreen());
-backdrop.addEventListener('click', closeSettings);
+backdrop.addEventListener('click', () => discardSettingsChanges());
 toggleKeyBtn?.addEventListener('click', () => {
   const show = apiKeyIn.type === 'password';
   apiKeyIn.type = show ? 'text' : 'password';
   toggleKeyBtn.textContent = show ? 'Masquer' : 'Afficher';
 });
+providerFieldset?.addEventListener('change', e => {
+  const t = /** @type {HTMLInputElement|null} */ (e.target);
+  if (!t || t.name !== 'bl-provider') return;
+  const p = /** @type {LlmProvider} */ (t.value);
+  if (!LLM_PROVIDERS.includes(p)) return;
+  refillModelSelectForProvider(p);
+  applyProviderSettingsUi(p);
+});
+
+cancelSettingsBtn?.addEventListener('click', () => discardSettingsChanges());
+
 saveBtn.addEventListener('click', () => {
+  const nextProv = getSettingsProvider();
+  llmProvider = LLM_PROVIDERS.includes(nextProv) ? nextProv : 'anthropic';
   apiKey   = apiKeyIn.value.trim();
-  model    = modelSel.value;
+  model    = modelSel?.value || pickModelForProvider(llmProvider);
   fastMode = !!(fastModeCheck && fastModeCheck.checked);
+  localStorage.setItem('bl_provider', llmProvider);
   localStorage.setItem('bl_key',      apiKey);
+  localStorage.setItem(llmModelStorageKey(llmProvider), model);
   localStorage.setItem('bl_model',    model);
   localStorage.setItem('bl_fast',     fastMode ? '1' : '0');
   closeSettings();
@@ -3282,3 +3679,4 @@ window.addEventListener('storage', e => {
 
 syncFlowInert('scan');
 setAppDockTab('scan');
+syncSettingsModalFromState();
