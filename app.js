@@ -3,7 +3,8 @@
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const GBOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
+/** Catalogue livres + couvertures (search.json, pas de clé requise). */
+const OL_SEARCH_JSON = 'https://openlibrary.org/search.json';
 
 const IMAGE_MAX_W = { normal: 1280, fast: 900 };
 const JPEG_Q      = { normal: 0.85, fast: 0.72 };
@@ -77,12 +78,14 @@ let lastBooksForAr = [];
 let lastEnrichedForAr = [];
 /** Dernière liste enrichie affichée — index → fiche détail. */
 let cachedEnrichedBooks = [];
-/** Résultats de l’écran recherche (Google Books). */
+/** Résultats de l’écran recherche (Open Library). */
 let cachedSearchBooks = [];
 const SEARCH_RECENT_KEY = 'bl_search_recent_json';
 const SEARCH_RECENT_MAX = 8;
 let searchDebounceTimer = null;
 let searchUiRequestGen = 0;
+/** Annule la requête catalogue en cours (nouvelle saisie, effacement, ou délai max). */
+let searchCatalogAbort = null;
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
 /** Fiche ouverte depuis une suggestion (hors liste de scan). */
@@ -1232,8 +1235,8 @@ async function fetchSheetDetailFromLlm(book) {
   if (vi.publishedDate) meta.push(`parution : ${vi.publishedDate}`);
   if (vi.publisher) meta.push(`éditeur : ${vi.publisher}`);
   if (vi.language) meta.push(`langue : ${vi.language}`);
-  const noteGb = vi.averageRating;
-  if (noteGb != null) meta.push(`note Google Books ~ ${Number(noteGb).toFixed(1)}`);
+  const noteCat = vi.averageRating;
+  if (noteCat != null) meta.push(`note catalogue ~ ${Number(noteCat).toFixed(1)}`);
   const desc = truncateBlurb(vi.description || '', 900);
   const decadesLecture = describeLastFiveDecadesForPrompt();
 
@@ -1319,28 +1322,170 @@ function mergeSheetDetailIntoBook(book, d) {
   book._sheetLlmFetched = true;
 }
 
-// ── Google Books — cover + metadata only (critique vient du modèle choisi) ─────────
-async function fetchCover(title, author) {
-  const q = `intitle:${encodeURIComponent(title)}`
-    + (author ? `+inauthor:${encodeURIComponent(author)}` : '');
-  try {
-    const r = await fetch(
-      `${GBOOKS_URL}?q=${q}&maxResults=1&fields=items(volumeInfo(title,subtitle,authors,imageLinks,pageCount,publishedDate,averageRating,ratingsCount,categories,description,publisher,language,industryIdentifiers))`
-    );
-    const d = await r.json();
-    return d.items?.[0]?.volumeInfo ?? null;
-  } catch { return null; }
+// ── Open Library (search.json) — couverture + métadonnées (critique = modèle IA) ───
+
+/** Codes langue MARC / OL → ISO 639-1 pour libellés. */
+const OL_LANG_TO_ISO = {
+  eng: 'en', fre: 'fr', spa: 'es', deu: 'de', ita: 'it', por: 'pt', dut: 'nl',
+  swe: 'sv', nor: 'no', dan: 'da', pol: 'pl', rus: 'ru', jpn: 'ja', kor: 'ko',
+  zho: 'zh', ara: 'ar', heb: 'he', gle: 'ga', lat: 'la', cat: 'ca', epo: 'eo',
+};
+
+function olLanguageToBookLang(code) {
+  if (!code) return '';
+  const c = String(code).trim().toLowerCase();
+  if (c.length === 2) return c;
+  return OL_LANG_TO_ISO[c.slice(0, 3)] || '';
 }
 
-async function fetchBooksSearch(query) {
+function openLibraryFirstSentenceToString(fs) {
+  if (fs == null) return '';
+  if (typeof fs === 'string') return fs.trim();
+  if (Array.isArray(fs)) return fs.map(x => String(x).trim()).filter(Boolean).join(' ');
+  return '';
+}
+
+/** URL de couverture depuis un hit search.json (id de couverture ou ISBN). */
+function openLibraryCoverUrlFromDoc(doc) {
+  if (!doc || typeof doc !== 'object') return '';
+  if (Number.isFinite(doc.cover_i)) {
+    return `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`;
+  }
+  const isbns = Array.isArray(doc.isbn) ? doc.isbn : [];
+  for (const raw of isbns) {
+    const s = String(raw).replace(/[\s-]/g, '');
+    if (/^\d{10}(\d{3})?$/.test(s)) {
+      return `https://covers.openlibrary.org/b/isbn/${s}-M.jpg`;
+    }
+  }
+  return '';
+}
+
+function openLibraryIsbnIdentifiers(doc) {
+  const raw = Array.isArray(doc?.isbn) ? doc.isbn : [];
+  const out = [];
+  const seen = new Set();
+  for (const x of raw) {
+    const s = String(x).replace(/[\s-]/g, '');
+    if (/^\d{13}$/.test(s) && !seen.has(s)) {
+      seen.add(s);
+      out.push({ type: 'ISBN_13', identifier: s });
+    }
+  }
+  for (const x of raw) {
+    const s = String(x).replace(/[\s-]/g, '');
+    if (/^\d{10}$/.test(s) && !seen.has(s)) {
+      seen.add(s);
+      out.push({ type: 'ISBN_10', identifier: s });
+    }
+  }
+  return out;
+}
+
+/**
+ * Hit Open Library `search.json` → même forme que l’ancien volumeInfo Google
+ * (couvertures, wishlist, fiche).
+ */
+function openLibraryDocToVolumeInfo(doc) {
+  if (!doc || typeof doc !== 'object') {
+    return {
+      title: '',
+      subtitle: '',
+      authors: [],
+      categories: [],
+      description: '',
+      publisher: '',
+      language: '',
+      publishedDate: '',
+      industryIdentifiers: [],
+    };
+  }
+  const authors = Array.isArray(doc.author_name)
+    ? doc.author_name.map(x => String(x).trim()).filter(Boolean)
+    : [];
+  const title = String(doc.title || '').trim() || 'Sans titre';
+  const coverUrl = openLibraryCoverUrlFromDoc(doc);
+  const langs = Array.isArray(doc.language) ? doc.language : [];
+  const langIso = olLanguageToBookLang(langs[0] || '');
+  const year = doc.first_publish_year != null ? String(doc.first_publish_year) : '';
+  const pageCount = Number.isFinite(doc.number_of_pages_median)
+    ? doc.number_of_pages_median
+    : undefined;
+  const desc = openLibraryFirstSentenceToString(doc.first_sentence);
+  const subjects = Array.isArray(doc.subject)
+    ? doc.subject.map(x => String(x).trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const pub = Array.isArray(doc.publisher) && doc.publisher.length
+    ? String(doc.publisher[0]).trim()
+    : '';
+
+  const vi = {
+    title,
+    subtitle: '',
+    authors,
+    categories: subjects,
+    description: desc,
+    publisher: pub,
+    language: langIso || '',
+    publishedDate: year,
+    pageCount,
+    industryIdentifiers: openLibraryIsbnIdentifiers(doc),
+  };
+  if (coverUrl) {
+    const small = coverUrl.includes('-M.jpg')
+      ? coverUrl.replace(/-M\.jpg$/, '-S.jpg')
+      : coverUrl;
+    vi.imageLinks = { thumbnail: coverUrl, smallThumbnail: small };
+  }
+  return vi;
+}
+
+async function fetchCover(title, author) {
+  const t = String(title || '').trim();
+  const pa = primaryAuthor(String(author || ''));
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', '1');
+    if (t) params.set('title', t);
+    if (pa) params.set('author', pa);
+    if (!t && !pa) return null;
+    const r = await fetch(`${OL_SEARCH_JSON}?${params}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const doc = Array.isArray(d.docs) ? d.docs[0] : null;
+    return doc ? openLibraryDocToVolumeInfo(doc) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBooksSearch(query, options = {}) {
+  const signal = options.signal;
   const q = String(query || '').trim();
   if (q.length < 2) return [];
-  const qenc = encodeURIComponent(q);
-  const url = `${GBOOKS_URL}?q=${qenc}&maxResults=20&fields=items(id,volumeInfo(title,subtitle,authors,imageLinks,pageCount,publishedDate,averageRating,ratingsCount,categories,description,publisher,language,industryIdentifiers))`;
-  const r = await fetch(url);
+  const params = new URLSearchParams();
+  params.set('q', q);
+  params.set('limit', '20');
+  const fetchOpts = /** @type {RequestInit} */ ({});
+  if (signal) fetchOpts.signal = signal;
+  const r = await fetch(`${OL_SEARCH_JSON}?${params}`, fetchOpts);
   if (!r.ok) throw new Error('Le catalogue est indisponible pour le moment.');
-  const d = await r.json();
-  return Array.isArray(d.items) ? d.items : [];
+  const ct = (r.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('application/json')) {
+    throw new Error('Le catalogue a renvoyé une réponse inattendue.');
+  }
+  let d;
+  try {
+    d = await r.json();
+  } catch {
+    throw new Error('Réponse catalogue illisible — réessayez.');
+  }
+  if (d && typeof d === 'object' && d.error) {
+    const msg = typeof d.error === 'string' ? d.error : 'Erreur Open Library.';
+    throw new Error(msg);
+  }
+  const docs = Array.isArray(d.docs) ? d.docs : [];
+  return docs.map(doc => ({ volumeInfo: openLibraryDocToVolumeInfo(doc) }));
 }
 
 // ── Fiche auteur : Wikipédia en tête (extrait + lien) ; Open Library en complément (dates, portrait si pas d’image wiki) ──
@@ -1377,7 +1522,7 @@ function genreLabelFromCategories(categories) {
   return leaf || 'Livre';
 }
 
-function googleVolumeToBook(vol) {
+function catalogVolumeToBook(vol) {
   const vi = vol.volumeInfo || {};
   const authors = Array.isArray(vi.authors) ? vi.authors.map(x => String(x).trim()).filter(Boolean) : [];
   const title = String(vi.title || '').trim() || 'Sans titre';
@@ -1641,7 +1786,7 @@ function renderWishlistPanelBody() {
   }).join('');
 }
 
-/** Affichage lisible de publishedDate Google Books (YYYY, YYYY-MM, etc.). */
+/** Affichage lisible de publishedDate catalogue (année seule, YYYY-MM, etc.). */
 function formatPublishedDisplay(raw) {
   if (!raw || !String(raw).trim()) return '';
   const s = String(raw).trim();
@@ -1984,9 +2129,9 @@ function buildSheetFactsStrip(book) {
   const ar = vi.averageRating;
   const rc = vi.ratingsCount;
   if (ar != null && rc) {
-    chips.push(`<span class="sheet-fact-chip">GB ★ ${Number(ar).toFixed(1)} · ${esc(fmtRatingsCount(rc))}</span>`);
+    chips.push(`<span class="sheet-fact-chip">★ ${Number(ar).toFixed(1)} · ${esc(fmtRatingsCount(rc))}</span>`);
   } else if (ar != null) {
-    chips.push(`<span class="sheet-fact-chip">GB ★ ${Number(ar).toFixed(1)}</span>`);
+    chips.push(`<span class="sheet-fact-chip">★ ${Number(ar).toFixed(1)}</span>`);
   }
 
   const catLeaves = [];
@@ -2364,7 +2509,7 @@ function renderSheetShell(book, gen, opts = {}) {
         <div class="sheet-panel-body"><div id="sheet-author-mount">${sheetAuthorSkeleton()}</div></div>
       </section>
 
-      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (Wikipédia, Google Books, catalogues ouverts, IA) — à croiser.</p>
+      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (Wikipédia, Open Library, IA) — à croiser.</p>
     </div>`;
 
   hydrateSheetAuthorZones(book, primaryAuthor(authorRaw), gen);
@@ -2561,7 +2706,7 @@ async function scan() {
     setStatus(`Étape 2/2 — ${books.length} livre(s), chargement des couvertures…`);
     setHint('Patience : les fiches complètes arrivent dans la liste.');
 
-    // Phase 2 — couvertures Google Books en parallèle
+    // Phase 2 — couvertures Open Library en parallèle
     const enriched = await Promise.all(
       books.map(async b => ({ ...b, info: await fetchCover(b.title, b.author) }))
     );
@@ -2871,14 +3016,19 @@ async function runBookSearchFromUi() {
   }
   searchUiRequestGen += 1;
   const gen = searchUiRequestGen;
+  searchCatalogAbort?.abort();
+  const ac = new AbortController();
+  searchCatalogAbort = ac;
+  const OL_SEARCH_MS = 28000;
+  const tid = setTimeout(() => ac.abort(), OL_SEARCH_MS);
   setSearchHint('Recherche dans le catalogue…', { show: true, error: false });
   if (searchSubmitBtn) searchSubmitBtn.disabled = true;
   searchEmpty?.classList.add('hidden');
   renderSearchResultCards([]);
   try {
-    const items = await fetchBooksSearch(q);
+    const items = await fetchBooksSearch(q, { signal: ac.signal });
     if (gen !== searchUiRequestGen) return;
-    const books = items.map(googleVolumeToBook);
+    const books = items.map(catalogVolumeToBook);
     if (!books.length) {
       setSearchHint('Aucun livre trouvé — essayez d’autres mots ou un autre auteur.', { show: true, error: false });
       renderSearchResultCards([]);
@@ -2890,9 +3040,17 @@ async function runBookSearchFromUi() {
     renderSearchResultCards(books);
   } catch (e) {
     if (gen !== searchUiRequestGen) return;
-    setSearchHint(e?.message || 'Erreur réseau.', { show: true, error: true });
+    const aborted = e && (e.name === 'AbortError' || e.name === 'TimeoutError');
+    setSearchHint(
+      aborted
+        ? 'Délai dépassé ou recherche annulée — Open Library est parfois lent. Réessayez.'
+        : (e?.message || 'Erreur réseau.'),
+      { show: true, error: true }
+    );
     renderSearchResultCards([]);
   } finally {
+    clearTimeout(tid);
+    if (searchCatalogAbort === ac) searchCatalogAbort = null;
     if (gen === searchUiRequestGen && searchSubmitBtn) searchSubmitBtn.disabled = false;
   }
 }
@@ -3550,6 +3708,8 @@ bookSearchInput?.addEventListener('input', () => {
   if (q.length < 2) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
+    searchCatalogAbort?.abort();
+    searchCatalogAbort = null;
     searchUiRequestGen += 1;
     setSearchHint('', { show: false });
     renderSearchResultCards([]);
@@ -3572,6 +3732,8 @@ searchClearBtn?.addEventListener('click', () => {
   if (bookSearchInput) bookSearchInput.value = '';
   clearTimeout(searchDebounceTimer);
   searchDebounceTimer = null;
+  searchCatalogAbort?.abort();
+  searchCatalogAbort = null;
   searchUiRequestGen += 1;
   updateSearchChrome();
   setSearchHint('', { show: false });

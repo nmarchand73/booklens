@@ -41,7 +41,7 @@
     {
       "name": "Rechercher un livre",
       "short_name": "Recherche",
-      "description": "Catalogue Google Books — titre ou auteur.",
+      "description": "Catalogue Open Library — titre ou auteur.",
       "url": "./?bl_tab=search",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },

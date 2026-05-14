@@ -25,7 +25,7 @@ Open **http://localhost:8080** — any static file server works the same way.
 ### PWA (première couche)
 
 - Fichiers : [`site.webmanifest`](site.webmanifest), [`sw.js`](sw.js), dossier [`icons/`](icons/) (192 + 512 pour l’invite « Ajouter à l’écran d’accueil »).
-- Le **service worker** met en cache le **shell** (`index.html`, `style.css`, `app.js`, manifest, icônes) pour un chargement plus rapide et une **page d’accueil hors ligne** limitée. Les **APIs** (LLM, Open Library, Wikipedia, Google Books, polices) restent **en ligne**.
+- Le **service worker** met en cache le **shell** (`index.html`, `style.css`, `app.js`, manifest, icônes) pour un chargement plus rapide et une **page d’accueil hors ligne** limitée. Les **APIs** (LLM, Open Library, Wikipedia, polices) restent **en ligne**.
 - **Mise à jour** : quand un nouveau `sw.js` est déployé, une bannière propose **Mettre à jour** (rechargement propre). Incrémenter `CACHE` dans `sw.js` quand le shell change.
 - **Raccourcis** (manifest) et liens profonds : `?bl_tab=scan`, `search`, `history`, `settings`, `wishlist` — l’URL est nettoyée avec `history.replaceState`.
 - Le SW n’est enregistré que sur **`https://`** ou **`http://localhost`** (pas sur `file://`).

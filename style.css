@@ -133,7 +133,7 @@ body {
   min-height: 0;
 }
 
-/* ── Recherche titre / auteur (Google Books) ───────────────────────────────── */
+/* ── Recherche titre / auteur (Open Library) ───────────────────────────────── */
 .screen-search {
   flex: 1 1 auto;
   min-height: 0;
