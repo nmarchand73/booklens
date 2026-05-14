@@ -1,18 +1,75 @@
 'use strict';
 
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
-const GBOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+/** Catalogue livres + couvertures (search.json, pas de clé requise). */
+const OL_SEARCH_JSON = 'https://openlibrary.org/search.json';
 
 const IMAGE_MAX_W = { normal: 1280, fast: 900 };
 const JPEG_Q      = { normal: 0.85, fast: 0.72 };
 const MAX_TOKENS  = { normal: 1680, fast: 1020 };
 
-let apiKey      = localStorage.getItem('bl_key')      || '';
-let model       = localStorage.getItem('bl_model')    || 'claude-sonnet-4-6';
+/** Modèles proposés : IDs stables côté API + lecture croisée perf/prix (repères [Artificial Analysis](https://artificialanalysis.ai/), doc OpenAI « Choosing a model », doc Google Gemini 3). Les préviews peuvent changer de nom — voir consoles fournisseurs. */
+
+/** @typedef {'anthropic'|'openai'|'gemini'} LlmProvider */
+const LLM_PROVIDERS = /** @type {const} */ (['anthropic', 'openai', 'gemini']);
+/** Modèle par défaut si rien de valide en stockage pour ce fournisseur. */
+const DEFAULT_LLM_MODEL = /** @type {Record<LlmProvider, string>} */ ({
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-5.4-mini',
+  gemini: 'gemini-2.5-flash',
+});
+/** Options affichées dans Paramètres (valeur API, libellé UI). */
+const LLM_MODEL_OPTIONS = /** @type {Record<LlmProvider, [string, string][]>} */ ({
+  anthropic: [
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5 — le plus rapide / le moins cher'],
+    ['claude-sonnet-4-6', 'Sonnet 4.6 — équilibre qualité · vitesse · coût'],
+    ['claude-opus-4-7', 'Opus 4.7 — qualité max (classements type Artificial Analysis)'],
+  ],
+  openai: [
+    ['gpt-5.4-nano', 'GPT-5.4 nano — latence & coût mini (doc OpenAI)'],
+    ['gpt-5.4-mini', 'GPT-5.4 mini — rapide & bon marché (défaut conseillé)'],
+    ['gpt-5.5', 'GPT-5.5 — flagship raisonnement & vision'],
+    ['gpt-4o-mini', 'GPT-4o mini — fallback / budgets serrés'],
+  ],
+  gemini: [
+    ['gemini-3-flash-preview', 'Gemini 3 Flash (preview) — très rapide (repères Artificial Analysis)'],
+    ['gemini-3.1-flash-lite-preview', 'Gemini 3.1 Flash-Lite (preview) — excellent rapport coût / vélocité'],
+    ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (preview) — qualité max'],
+    ['gemini-2.5-flash', 'Gemini 2.5 Flash — stable, vision'],
+    ['gemini-2.5-pro', 'Gemini 2.5 Pro — qualité sans preview'],
+  ],
+});
+
+function llmModelStorageKey(provider) {
+  return `bl_model_${provider}`;
+}
+
+function loadLlmProvider() {
+  const v = localStorage.getItem('bl_provider');
+  return LLM_PROVIDERS.includes(/** @type {any} */ (v)) ? /** @type {LlmProvider} */ (v) : 'anthropic';
+}
+
+/** @type {LlmProvider} */
+let llmProvider = loadLlmProvider();
+let apiKey = localStorage.getItem('bl_key') || '';
+
+function pickModelForProvider(provider) {
+  const allowed = new Set(LLM_MODEL_OPTIONS[provider].map(x => x[0]));
+  const legacy = localStorage.getItem('bl_model');
+  const scoped = localStorage.getItem(llmModelStorageKey(provider));
+  const cand = scoped || legacy || DEFAULT_LLM_MODEL[provider];
+  if (allowed.has(cand)) return cand;
+  if (provider === 'anthropic' && typeof cand === 'string' && cand.startsWith('claude-')) return cand;
+  return DEFAULT_LLM_MODEL[provider];
+}
+
+let model = pickModelForProvider(llmProvider);
 let fastMode    = localStorage.getItem('bl_fast') === '1';
 let busy        = false;
 let uploadedImg = null;
-/** Dimensions de la frame réellement envoyée à Claude (canvas). */
+/** Dimensions de la frame réellement envoyée au modèle (canvas). */
 let lastCaptureSize = { w: 0, h: 0 };
 /** Dimensions natives de la photo source — repère pour object-fit: contain (RA). */
 let lastSourceSize = { w: 0, h: 0 };
@@ -21,12 +78,14 @@ let lastBooksForAr = [];
 let lastEnrichedForAr = [];
 /** Dernière liste enrichie affichée — index → fiche détail. */
 let cachedEnrichedBooks = [];
-/** Résultats de l’écran recherche (Google Books). */
+/** Résultats de l’écran recherche (Open Library). */
 let cachedSearchBooks = [];
 const SEARCH_RECENT_KEY = 'bl_search_recent_json';
 const SEARCH_RECENT_MAX = 8;
 let searchDebounceTimer = null;
 let searchUiRequestGen = 0;
+/** Annule la requête catalogue en cours (nouvelle saisie, effacement, ou délai max). */
+let searchCatalogAbort = null;
 /** Incrémenté à chaque ouverture de fiche — ignore les réponses réseau obsolètes. */
 let bookSheetLoadGen = 0;
 /** Fiche ouverte depuis une suggestion (hors liste de scan). */
@@ -146,6 +205,11 @@ const settingsBtn  = $('settings-btn');
 const modal        = $('settings-modal');
 const backdrop     = $('modal-backdrop');
 const apiKeyIn     = $('api-key-input');
+const apiKeyLabel  = $('api-key-label');
+const apiKeyHelp   = $('api-key-help');
+const providerFieldset = $('provider-fieldset');
+const keyPortalLink = $('key-portal-link');
+const cancelSettingsBtn = $('cancel-settings-btn');
 const modelSel     = $('model-select');
 const fastModeCheck = $('fast-mode-check');
 const saveBtn      = $('save-settings-btn');
@@ -153,12 +217,9 @@ const toggleKeyBtn = $('toggle-key-btn');
 const hintLine     = $('hint-line');
 /** Une seule consigne au démarrage (le titre viewport dit quoi photographier). */
 const STATUS_IDLE_NO_IMAGE = 'Photo, Importer ou fichier — une image, puis Envoyer.';
-const resultsDrawerToggle = $('results-drawer-toggle');
 const resultsPanel = $('results');
 const splitRoot = $('split-root');
-const splitTop = $('split-top');
-const appDock = $('app-dock');
-const splitGutter = $('split-gutter');
+const screenResults = $('screen-results');
 const vp           = $('viewport');
 const arLayer      = $('ar-layer');
 const zoomRoot     = $('viewport-zoom-root');
@@ -191,42 +252,94 @@ function setAppDockTab(tab) {
   setCur(scanBtn, tab === 'scan');
 }
 
+const FLOW_ACTIVE_CLASS = 'split-flow-layer--active';
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Défilement doux vers le haut (listes recherche / résultats scan). */
+function scrollPanelToTop(el, smooth) {
+  if (!el) return;
+  try {
+    el.scrollTo({ top: 0, behavior: smooth && !prefersReducedMotion() ? 'smooth' : 'auto' });
+  } catch {
+    el.scrollTop = 0;
+  }
+}
+
+function syncFlowInert(which) {
+  [
+    ['scan', screenScan],
+    ['search', screenSearch],
+    ['results', screenResults],
+  ].forEach(([key, el]) => {
+    if (!el || typeof el !== 'object') return;
+    const active = key === which;
+    if ('inert' in el) el.inert = !active;
+  });
+}
+
+/** `which` : scan | search | results — fondu CSS entre les trois panneaux. */
+function setFlowScreen(which) {
+  if (which !== 'scan' && which !== 'search' && which !== 'results') return;
+  screenScan?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'scan');
+  screenSearch?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'search');
+  screenResults?.classList.toggle(FLOW_ACTIVE_CLASS, which === 'results');
+  screenScan?.setAttribute('aria-hidden', which !== 'scan');
+  screenSearch?.setAttribute('aria-hidden', which !== 'search');
+  screenResults?.setAttribute('aria-hidden', which !== 'results');
+  splitRoot?.classList.toggle('split-root--search', which === 'search');
+  syncFlowInert(which);
+  scheduleArReflow();
+}
+
 function isSearchScreenActive() {
-  return !!(screenSearch && !screenSearch.classList.contains('hidden'));
+  return !!(screenSearch && screenSearch.classList.contains(FLOW_ACTIVE_CLASS));
+}
+
+function isResultsScreenActive() {
+  return !!(screenResults && screenResults.classList.contains(FLOW_ACTIVE_CLASS));
 }
 
 function showScanScreen() {
-  screenScan?.classList.remove('hidden');
-  screenSearch?.classList.add('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'true');
-  splitRoot?.classList.remove('split-root--search');
-  applySplitLayout();
-  scheduleArReflow();
+  setFlowScreen('scan');
+}
+
+function showResultsScreen() {
+  closeWishlistModal();
+  setFlowScreen('results');
 }
 
 function openSearchScreen() {
   closeSettings();
   closeWishlistModal();
-  screenScan?.classList.add('hidden');
-  screenSearch?.classList.remove('hidden');
-  if (screenSearch) screenSearch.setAttribute('aria-hidden', 'false');
-  splitRoot?.classList.add('split-root--search');
+  setFlowScreen('search');
   setAppDockTab('search');
-  applySplitLayout();
   renderSearchRecentPanel();
   updateSearchChrome();
-  bookSearchInput?.focus({ preventScroll: true });
+  scrollPanelToTop($('search-scroll'), true);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      bookSearchInput?.focus({ preventScroll: true });
+    });
+  });
 }
 
 function openHistoryFromDock() {
-  showScanScreen();
   closeSettings();
   closeWishlistModal();
-  expandResultsDrawer();
-  const body = $('results-panel-body');
-  if (body) body.scrollTop = 0;
-  setAppDockTab('history');
-  resultsDrawerToggle?.focus({ preventScroll: true });
+  if (resultsPanel?.classList.contains('has-results') && resultsList?.querySelector('.book-card')) {
+    showResultsScreen();
+    scrollPanelToTop(resultsList, true);
+    setAppDockTab('history');
+    requestAnimationFrame(() => {
+      clearBtn?.focus({ preventScroll: true });
+    });
+    return;
+  }
+  showScanScreen();
+  setAppDockTab('scan');
 }
 
 /** Zoom / pan sur la photo (roulette, boutons, glisser souris, 1 doigt tactile, pincement 2 doigts). */
@@ -306,181 +419,6 @@ function scheduleArReflow() {
       renderArMarkers(lastBooksForAr);
       if (lastEnrichedForAr.length) patchArMarkersWithCovers(lastEnrichedForAr);
     });
-  });
-}
-
-const SPLIT_STORAGE_KEY = 'bl_split_bottom_frac';
-
-function clampSplitNum(n, lo, hi) {
-  return Math.min(hi, Math.max(lo, n));
-}
-
-function readSplitBottomFrac() {
-  const raw = localStorage.getItem(SPLIT_STORAGE_KEY);
-  const v = parseFloat(raw);
-  if (!Number.isFinite(v) || v < 0.12 || v > 0.88) return null;
-  return v;
-}
-
-function splitMinBottomPx() {
-  if (resultsPanel.classList.contains('collapsed')) return 0;
-  return resultsPanel.classList.contains('has-results') ? 140 : 96;
-}
-
-function splitMinTopPx() {
-  return 120;
-}
-
-function persistSplitFracFromPixels(bottomPx, avail) {
-  if (avail <= 0) return;
-  const f = clampSplitNum(bottomPx / avail, 0.12, 0.88);
-  localStorage.setItem(SPLIT_STORAGE_KEY, String(f));
-}
-
-/** Hauteur utile pour partager photo / tiroir (hors gutter et barre de navigation fixe en bas). */
-function splitPaneAvailHeightPx() {
-  if (!splitRoot || !splitGutter) return 0;
-  const rootR = splitRoot.getBoundingClientRect();
-  const gh = splitGutter.offsetHeight || 40;
-  const dockH = appDock ? appDock.offsetHeight : 0;
-  return Math.max(1, rootR.height - gh - dockH);
-}
-
-function applySplitLayout() {
-  if (!splitRoot || !splitTop || !resultsPanel || !splitGutter) return;
-
-  if (splitRoot.classList.contains('split-root--search')) {
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitRoot.classList.remove('split-custom');
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  const collapsed = resultsPanel.classList.contains('collapsed');
-  splitRoot.classList.toggle('split-gutter--disabled', collapsed);
-
-  if (collapsed) {
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitRoot.classList.remove('split-custom');
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  const frac = readSplitBottomFrac();
-  if (frac == null) {
-    splitRoot.classList.remove('split-custom');
-    splitTop.style.flex = '';
-    splitTop.style.height = '';
-    resultsPanel.style.flex = '';
-    resultsPanel.style.height = '';
-    splitGutter.removeAttribute('aria-valuenow');
-    return;
-  }
-
-  splitRoot.classList.add('split-custom');
-  const avail = splitPaneAvailHeightPx();
-  const minBot = splitMinBottomPx();
-  const minTop = splitMinTopPx();
-  let bottomPx = avail * frac;
-  bottomPx = clampSplitNum(bottomPx, minBot, Math.max(minBot, avail - minTop));
-  const topPx = avail - bottomPx;
-
-  splitTop.style.flex = '0 0 auto';
-  splitTop.style.height = `${Math.round(topPx)}px`;
-  resultsPanel.style.flex = '0 0 auto';
-  resultsPanel.style.height = `${Math.round(bottomPx)}px`;
-
-  const pct = Math.round((bottomPx / avail) * 100);
-  splitGutter.setAttribute('aria-valuenow', String(clampSplitNum(pct, 8, 92)));
-}
-
-function initSplitPaneResize() {
-  if (!splitGutter || !splitRoot || !splitTop || !resultsPanel) return;
-
-  let activePointer = null;
-
-  function onMove(ev) {
-    if (activePointer === null || ev.pointerId !== activePointer) return;
-    ev.preventDefault();
-    const rootR = splitRoot.getBoundingClientRect();
-    const gh = splitGutter.offsetHeight || 40;
-    const avail = splitPaneAvailHeightPx();
-    const minTop = splitMinTopPx();
-    const minBot = splitMinBottomPx();
-    const y = ev.clientY;
-    let topPx = y - rootR.top - gh / 2;
-    topPx = clampSplitNum(topPx, minTop, avail - minBot);
-    const bottomPx = avail - topPx;
-    splitRoot.classList.add('split-custom');
-    splitTop.style.flex = '0 0 auto';
-    splitTop.style.height = `${Math.round(topPx)}px`;
-    resultsPanel.style.flex = '0 0 auto';
-    resultsPanel.style.height = `${Math.round(bottomPx)}px`;
-    const pct = Math.round((bottomPx / avail) * 100);
-    splitGutter.setAttribute('aria-valuenow', String(clampSplitNum(pct, 8, 92)));
-  }
-
-  function endDrag(ev) {
-    if (activePointer === null || (ev.pointerId != null && ev.pointerId !== activePointer)) return;
-    const pid = activePointer;
-    activePointer = null;
-    try {
-      splitGutter.releasePointerCapture(pid);
-    } catch (_) { /* ignore */ }
-    splitRoot.classList.remove('split-gutter-active');
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', endDrag);
-    window.removeEventListener('pointercancel', endDrag);
-    const avail = splitPaneAvailHeightPx();
-    const bottomPx = resultsPanel.getBoundingClientRect().height;
-    persistSplitFracFromPixels(bottomPx, avail);
-    applySplitLayout();
-    scheduleArReflow();
-  }
-
-  splitGutter.addEventListener('pointerdown', ev => {
-    if (resultsPanel.classList.contains('collapsed')) return;
-    if (ev.button !== undefined && ev.button !== 0) return;
-    activePointer = ev.pointerId;
-    splitRoot.classList.add('split-gutter-active');
-    try {
-      splitGutter.setPointerCapture(ev.pointerId);
-    } catch (_) { /* ignore */ }
-    window.addEventListener('pointermove', onMove, { passive: false });
-    window.addEventListener('pointerup', endDrag);
-    window.addEventListener('pointercancel', endDrag);
-    ev.preventDefault();
-  });
-
-  splitGutter.addEventListener('keydown', ev => {
-    if (resultsPanel.classList.contains('collapsed')) return;
-    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
-    ev.preventDefault();
-    const step = ev.shiftKey ? 32 : 16;
-    const avail = splitPaneAvailHeightPx();
-    const stored = readSplitBottomFrac();
-    const curBottom = stored != null ? avail * stored : resultsPanel.getBoundingClientRect().height;
-    /* Bas = plus d’espace pour les résultats (intuitif clavier / lecteurs d’écran). */
-    const delta = ev.key === 'ArrowDown' ? step : -step;
-    const newBottom = clampSplitNum(curBottom + delta, splitMinBottomPx(), avail - splitMinTopPx());
-    persistSplitFracFromPixels(newBottom, avail);
-    applySplitLayout();
-    scheduleArReflow();
-  });
-
-  const splitRo = new ResizeObserver(() => applySplitLayout());
-  splitRo.observe(splitRoot);
-  if (appDock) splitRo.observe(appDock);
-
-  requestAnimationFrame(() => {
-    applySplitLayout();
-    scheduleArReflow();
   });
 }
 
@@ -719,8 +657,8 @@ function refreshScanPixelLayer() {
   scanPixelRaf = requestAnimationFrame(scanPixelTick);
 }
 
-// ── Claude vision + critique ──────────────────────────────────────────────────
-// Claude identifies books AND provides critiques in a single call.
+// ── Vision + critique (Anthropic / OpenAI / Gemini) ───────────────────────────
+// Un seul appel : identification des livres + critiques JSON.
 const SYSTEM_PROMPT = `Tu es critique littéraire professionnel (conseil de lecture exigeant, ton presse sérieuse). Analyse cette photo de rayons de librairie.
 Pour chaque livre dont tu identifies le titre sur les tranches ou couvertures :
 - title: titre exact tel qu'il apparaît dans l'image
@@ -807,6 +745,303 @@ async function claudeNonStreamRequest(bodyObj) {
   }
   const d = await res.json();
   return d.content?.[0]?.text || '';
+}
+
+async function readOpenAiSse(body, onFirstToken) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let first = true;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const ev = JSON.parse(payload);
+        const piece = ev.choices?.[0]?.delta?.content;
+        if (typeof piece === 'string' && piece.length) {
+          if (first) {
+            first = false;
+            onFirstToken?.();
+          }
+          fullText += piece;
+        }
+      } catch {
+        /* chunk SSE incomplet */
+      }
+    }
+  }
+  return fullText;
+}
+
+function llmJsonErrorMessage(status, raw) {
+  try {
+    const j = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const msg = j.error?.message || j.message;
+    if (msg) return String(msg);
+  } catch { /* ignore */ }
+  return `Erreur API ${status}`;
+}
+
+async function llmCompleteText(systemPrompt, userText, maxOutTokens) {
+  if (llmProvider === 'anthropic') {
+    return claudeNonStreamRequest({
+      model,
+      max_tokens: maxOutTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
+    });
+  }
+  if (llmProvider === 'openai') {
+    const res = await fetch(OPENAI_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxOutTokens,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userText },
+        ],
+      }),
+    });
+    const raw = await res.text();
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+      if (res.status === 429) throw new Error('Quota OpenAI — réessayez plus tard');
+      throw new Error(llmJsonErrorMessage(res.status, raw));
+    }
+    const d = JSON.parse(raw);
+    return d.choices?.[0]?.message?.content || '';
+  }
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userText }] }],
+      generation_config: {
+        max_output_tokens: maxOutTokens,
+        temperature: 0.25,
+      },
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      try {
+        const j = JSON.parse(raw);
+        const m = j.error?.message || '';
+        if (/API\s*key|api\s*key|PERMISSION_DENIED/i.test(String(m))) {
+          throw new Error('Clé API Google AI (Gemini) invalide — vérifiez les paramètres');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Clé API')) throw e;
+      }
+    }
+    if (res.status === 429) throw new Error('Quota Gemini — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+  const d = JSON.parse(raw);
+  const parts = d.candidates?.[0]?.content?.parts;
+  const txt = Array.isArray(parts)
+    ? parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('')
+    : '';
+  if (!txt.trim() && d.promptFeedback?.blockReason) {
+    throw new Error('Réponse Gemini bloquée (sécurité / filtres).');
+  }
+  return txt;
+}
+
+async function callAnthropicVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+
+  const baseBody = {
+    model,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+      { type: 'text', text: userText },
+    ]}],
+  };
+
+  const res = await fetch(CLAUDE_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({ ...baseBody, stream: true }),
+  });
+
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error('Clé API invalide — vérifiez les paramètres');
+    if (res.status === 429) throw new Error('Quota dépassé — réessayez dans quelques secondes');
+    throw new Error(e.error?.message || `Erreur API ${res.status}`);
+  }
+
+  let txt = '';
+  try {
+    txt = await readClaudeSse(res.body, onFirstToken);
+  } catch {
+    txt = '';
+  }
+
+  if (!txt.trim()) {
+    txt = await claudeNonStreamRequest(baseBody);
+  }
+
+  return parseBooksJson(txt);
+}
+
+async function callOpenAiVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+  const dataUrl = `data:image/jpeg;base64,${b64}`;
+
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    stream: true,
+    messages: [
+      { role: 'system', content: system },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: userText },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+  };
+
+  const res = await fetch(OPENAI_CHAT_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const raw = await res.text();
+    if (res.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+    if (res.status === 429) throw new Error('Quota OpenAI — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+
+  let txt = '';
+  try {
+    if (res.body) txt = await readOpenAiSse(res.body, onFirstToken);
+  } catch {
+    txt = '';
+  }
+
+  if (!txt.trim()) {
+    const res2 = await fetch(OPENAI_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ ...body, stream: false }),
+    });
+    const raw2 = await res2.text();
+    if (!res2.ok) {
+      if (res2.status === 401) throw new Error('Clé API OpenAI invalide — vérifiez les paramètres');
+      throw new Error(llmJsonErrorMessage(res2.status, raw2));
+    }
+    const d2 = JSON.parse(raw2);
+    txt = d2.choices?.[0]?.message?.content || '';
+  }
+
+  return parseBooksJson(txt);
+}
+
+async function callGeminiVisionBooks(b64, onFirstToken) {
+  const fast = fastMode;
+  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
+  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
+  const userText = fast
+    ? 'Liste les livres visibles + JSON demandé.'
+    : 'Identifie les livres et fournis une critique pour chacun.';
+
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: system }] },
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: userText },
+          { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+        ],
+      }],
+      generation_config: {
+        max_output_tokens: maxTokens,
+        temperature: 0.2,
+      },
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      try {
+        const j = JSON.parse(raw);
+        const m = j.error?.message || '';
+        if (/API\s*key|api\s*key|PERMISSION_DENIED/i.test(String(m))) {
+          throw new Error('Clé API Google AI (Gemini) invalide — vérifiez les paramètres');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Clé API')) throw e;
+      }
+    }
+    if (res.status === 429) throw new Error('Quota Gemini — réessayez plus tard');
+    throw new Error(llmJsonErrorMessage(res.status, raw));
+  }
+  const d = JSON.parse(raw);
+  const parts = d.candidates?.[0]?.content?.parts;
+  const txt = Array.isArray(parts)
+    ? parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('')
+    : '';
+  if (txt.trim()) onFirstToken?.();
+  if (!txt.trim() && d.promptFeedback?.blockReason) {
+    throw new Error('Réponse Gemini bloquée (sécurité / filtres).');
+  }
+  return parseBooksJson(txt);
+}
+
+async function callVisionBooks(b64, onFirstToken) {
+  if (llmProvider === 'openai') return callOpenAiVisionBooks(b64, onFirstToken);
+  if (llmProvider === 'gemini') return callGeminiVisionBooks(b64, onFirstToken);
+  return callAnthropicVisionBooks(b64, onFirstToken);
 }
 
 function parseBooksJson(txt) {
@@ -1000,8 +1235,8 @@ async function fetchSheetDetailFromLlm(book) {
   if (vi.publishedDate) meta.push(`parution : ${vi.publishedDate}`);
   if (vi.publisher) meta.push(`éditeur : ${vi.publisher}`);
   if (vi.language) meta.push(`langue : ${vi.language}`);
-  const noteGb = vi.averageRating;
-  if (noteGb != null) meta.push(`note Google Books ~ ${Number(noteGb).toFixed(1)}`);
+  const noteCat = vi.averageRating;
+  if (noteCat != null) meta.push(`note catalogue ~ ${Number(noteCat).toFixed(1)}`);
   const desc = truncateBlurb(vi.description || '', 900);
   const decadesLecture = describeLastFiveDecadesForPrompt();
 
@@ -1032,12 +1267,7 @@ Réponds par un objet JSON avec exactement ces clés :
 - "livres_similaires" : tableau d'exactement 10 objets {"titre": string, "auteur": string, "accroche": string|null, "annee": string|number, "style": string|null} — pour « prolonger la lecture » si on a aimé CE livre : œuvres réelles (titres + auteurs exacts), autres auteurs ou titres comparables quand c'est pertinent. Répartition stricte : exactement 2 livres par décennie sur les 5 dernières décennies calendaires, soit les plages ${decadesLecture} — chaque "annee" doit être l'année de première parution (4 chiffres) qui tombe dans l'une de ces plages uniquement ; 2 titres dans chaque plage, ni plus ni moins si tu peux tenir le quota (sinon complète au mieux avec des titres sûrs). Liste dans l'ordre : les deux titres de la décennie la plus récente d'abord, puis les deux de la suivante, et ainsi de suite jusqu'à la cinquième décennie (aligné sur les plages ci-dessus). style = genre ou registre court en français sinon null ; accroche = une ou deux phrases courtes (max ~220 caractères) : situation, protagoniste, conflit ou mystère posé, sans spoiler de résolution ; interdit : répéter "style", clichés « polar haute tension », commentaires sur le suspense ou la qualité littéraire ; ne pas inclure le titre analysé ni sa suite directe évidente
 - "si_similaire" : (optionnel) tableau de chaînes "Titre — Auteur" aligné sur les mêmes livres, ou [] si tu as déjà tout mis dans livres_similaires`;
 
-  const text = await claudeNonStreamRequest({
-    model,
-    max_tokens: MAX_TOKENS_SHEET_DETAIL,
-    system: SYSTEM_SHEET_DETAIL,
-    messages: [{ role: 'user', content: [{ type: 'text', text: userMsg }] }],
-  });
+  const text = await llmCompleteText(SYSTEM_SHEET_DETAIL, userMsg, MAX_TOKENS_SHEET_DETAIL);
   return text;
 }
 
@@ -1092,78 +1322,170 @@ function mergeSheetDetailIntoBook(book, d) {
   book._sheetLlmFetched = true;
 }
 
-async function callClaude(b64, onFirstToken) {
-  const fast = fastMode;
-  const maxTokens = MAX_TOKENS[fast ? 'fast' : 'normal'];
-  const system = fast ? SYSTEM_PROMPT_FAST : SYSTEM_PROMPT;
-  const userText = fast
-    ? 'Liste les livres visibles + JSON demandé.'
-    : 'Identifie les livres et fournis une critique pour chacun.';
+// ── Open Library (search.json) — couverture + métadonnées (critique = modèle IA) ───
 
-  const baseBody = {
-    model,
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-      { type: 'text', text: userText },
-    ]}],
+/** Codes langue MARC / OL → ISO 639-1 pour libellés. */
+const OL_LANG_TO_ISO = {
+  eng: 'en', fre: 'fr', spa: 'es', deu: 'de', ita: 'it', por: 'pt', dut: 'nl',
+  swe: 'sv', nor: 'no', dan: 'da', pol: 'pl', rus: 'ru', jpn: 'ja', kor: 'ko',
+  zho: 'zh', ara: 'ar', heb: 'he', gle: 'ga', lat: 'la', cat: 'ca', epo: 'eo',
+};
+
+function olLanguageToBookLang(code) {
+  if (!code) return '';
+  const c = String(code).trim().toLowerCase();
+  if (c.length === 2) return c;
+  return OL_LANG_TO_ISO[c.slice(0, 3)] || '';
+}
+
+function openLibraryFirstSentenceToString(fs) {
+  if (fs == null) return '';
+  if (typeof fs === 'string') return fs.trim();
+  if (Array.isArray(fs)) return fs.map(x => String(x).trim()).filter(Boolean).join(' ');
+  return '';
+}
+
+/** URL de couverture depuis un hit search.json (id de couverture ou ISBN). */
+function openLibraryCoverUrlFromDoc(doc) {
+  if (!doc || typeof doc !== 'object') return '';
+  if (Number.isFinite(doc.cover_i)) {
+    return `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`;
+  }
+  const isbns = Array.isArray(doc.isbn) ? doc.isbn : [];
+  for (const raw of isbns) {
+    const s = String(raw).replace(/[\s-]/g, '');
+    if (/^\d{10}(\d{3})?$/.test(s)) {
+      return `https://covers.openlibrary.org/b/isbn/${s}-M.jpg`;
+    }
+  }
+  return '';
+}
+
+function openLibraryIsbnIdentifiers(doc) {
+  const raw = Array.isArray(doc?.isbn) ? doc.isbn : [];
+  const out = [];
+  const seen = new Set();
+  for (const x of raw) {
+    const s = String(x).replace(/[\s-]/g, '');
+    if (/^\d{13}$/.test(s) && !seen.has(s)) {
+      seen.add(s);
+      out.push({ type: 'ISBN_13', identifier: s });
+    }
+  }
+  for (const x of raw) {
+    const s = String(x).replace(/[\s-]/g, '');
+    if (/^\d{10}$/.test(s) && !seen.has(s)) {
+      seen.add(s);
+      out.push({ type: 'ISBN_10', identifier: s });
+    }
+  }
+  return out;
+}
+
+/**
+ * Hit Open Library `search.json` → même forme que l’ancien volumeInfo Google
+ * (couvertures, wishlist, fiche).
+ */
+function openLibraryDocToVolumeInfo(doc) {
+  if (!doc || typeof doc !== 'object') {
+    return {
+      title: '',
+      subtitle: '',
+      authors: [],
+      categories: [],
+      description: '',
+      publisher: '',
+      language: '',
+      publishedDate: '',
+      industryIdentifiers: [],
+    };
+  }
+  const authors = Array.isArray(doc.author_name)
+    ? doc.author_name.map(x => String(x).trim()).filter(Boolean)
+    : [];
+  const title = String(doc.title || '').trim() || 'Sans titre';
+  const coverUrl = openLibraryCoverUrlFromDoc(doc);
+  const langs = Array.isArray(doc.language) ? doc.language : [];
+  const langIso = olLanguageToBookLang(langs[0] || '');
+  const year = doc.first_publish_year != null ? String(doc.first_publish_year) : '';
+  const pageCount = Number.isFinite(doc.number_of_pages_median)
+    ? doc.number_of_pages_median
+    : undefined;
+  const desc = openLibraryFirstSentenceToString(doc.first_sentence);
+  const subjects = Array.isArray(doc.subject)
+    ? doc.subject.map(x => String(x).trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const pub = Array.isArray(doc.publisher) && doc.publisher.length
+    ? String(doc.publisher[0]).trim()
+    : '';
+
+  const vi = {
+    title,
+    subtitle: '',
+    authors,
+    categories: subjects,
+    description: desc,
+    publisher: pub,
+    language: langIso || '',
+    publishedDate: year,
+    pageCount,
+    industryIdentifiers: openLibraryIsbnIdentifiers(doc),
   };
-
-  const res = await fetch(CLAUDE_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({ ...baseBody, stream: true }),
-  });
-
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    if (res.status === 401) throw new Error('Clé API invalide — vérifiez les paramètres');
-    if (res.status === 429) throw new Error('Quota dépassé — réessayez dans quelques secondes');
-    throw new Error(e.error?.message || `Erreur API ${res.status}`);
+  if (coverUrl) {
+    const small = coverUrl.includes('-M.jpg')
+      ? coverUrl.replace(/-M\.jpg$/, '-S.jpg')
+      : coverUrl;
+    vi.imageLinks = { thumbnail: coverUrl, smallThumbnail: small };
   }
-
-  let txt = '';
-  try {
-    txt = await readClaudeSse(res.body, onFirstToken);
-  } catch {
-    txt = '';
-  }
-
-  if (!txt.trim()) {
-    txt = await claudeNonStreamRequest(baseBody);
-  }
-
-  return parseBooksJson(txt);
+  return vi;
 }
 
-// ── Google Books — cover + metadata only (critique comes from Claude) ─────────
 async function fetchCover(title, author) {
-  const q = `intitle:${encodeURIComponent(title)}`
-    + (author ? `+inauthor:${encodeURIComponent(author)}` : '');
+  const t = String(title || '').trim();
+  const pa = primaryAuthor(String(author || ''));
   try {
-    const r = await fetch(
-      `${GBOOKS_URL}?q=${q}&maxResults=1&fields=items(volumeInfo(title,subtitle,authors,imageLinks,pageCount,publishedDate,averageRating,ratingsCount,categories,description,publisher,language,industryIdentifiers))`
-    );
+    const params = new URLSearchParams();
+    params.set('limit', '1');
+    if (t) params.set('title', t);
+    if (pa) params.set('author', pa);
+    if (!t && !pa) return null;
+    const r = await fetch(`${OL_SEARCH_JSON}?${params}`);
+    if (!r.ok) return null;
     const d = await r.json();
-    return d.items?.[0]?.volumeInfo ?? null;
-  } catch { return null; }
+    const doc = Array.isArray(d.docs) ? d.docs[0] : null;
+    return doc ? openLibraryDocToVolumeInfo(doc) : null;
+  } catch {
+    return null;
+  }
 }
 
-async function fetchBooksSearch(query) {
+async function fetchBooksSearch(query, options = {}) {
+  const signal = options.signal;
   const q = String(query || '').trim();
   if (q.length < 2) return [];
-  const qenc = encodeURIComponent(q);
-  const url = `${GBOOKS_URL}?q=${qenc}&maxResults=20&fields=items(id,volumeInfo(title,subtitle,authors,imageLinks,pageCount,publishedDate,averageRating,ratingsCount,categories,description,publisher,language,industryIdentifiers))`;
-  const r = await fetch(url);
+  const params = new URLSearchParams();
+  params.set('q', q);
+  params.set('limit', '20');
+  const fetchOpts = /** @type {RequestInit} */ ({});
+  if (signal) fetchOpts.signal = signal;
+  const r = await fetch(`${OL_SEARCH_JSON}?${params}`, fetchOpts);
   if (!r.ok) throw new Error('Le catalogue est indisponible pour le moment.');
-  const d = await r.json();
-  return Array.isArray(d.items) ? d.items : [];
+  const ct = (r.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('application/json')) {
+    throw new Error('Le catalogue a renvoyé une réponse inattendue.');
+  }
+  let d;
+  try {
+    d = await r.json();
+  } catch {
+    throw new Error('Réponse catalogue illisible — réessayez.');
+  }
+  if (d && typeof d === 'object' && d.error) {
+    const msg = typeof d.error === 'string' ? d.error : 'Erreur Open Library.';
+    throw new Error(msg);
+  }
+  const docs = Array.isArray(d.docs) ? d.docs : [];
+  return docs.map(doc => ({ volumeInfo: openLibraryDocToVolumeInfo(doc) }));
 }
 
 // ── Fiche auteur : Wikipédia en tête (extrait + lien) ; Open Library en complément (dates, portrait si pas d’image wiki) ──
@@ -1200,7 +1522,7 @@ function genreLabelFromCategories(categories) {
   return leaf || 'Livre';
 }
 
-function googleVolumeToBook(vol) {
+function catalogVolumeToBook(vol) {
   const vi = vol.volumeInfo || {};
   const authors = Array.isArray(vi.authors) ? vi.authors.map(x => String(x).trim()).filter(Boolean) : [];
   const title = String(vi.title || '').trim() || 'Sans titre';
@@ -1418,7 +1740,7 @@ function refreshWishlistDependentUi() {
   patchSheetWishlistButton();
   renderWishlistPanelBody();
   if (resultsPanel?.classList.contains('has-results') && Array.isArray(cachedEnrichedBooks) && cachedEnrichedBooks.length) {
-    renderCards(cachedEnrichedBooks);
+    renderCards(cachedEnrichedBooks, false);
     patchArMarkersWithCovers(cachedEnrichedBooks);
   }
   if (cachedSearchBooks?.length && searchResultsList) {
@@ -1464,7 +1786,7 @@ function renderWishlistPanelBody() {
   }).join('');
 }
 
-/** Affichage lisible de publishedDate Google Books (YYYY, YYYY-MM, etc.). */
+/** Affichage lisible de publishedDate catalogue (année seule, YYYY-MM, etc.). */
 function formatPublishedDisplay(raw) {
   if (!raw || !String(raw).trim()) return '';
   const s = String(raw).trim();
@@ -1807,9 +2129,9 @@ function buildSheetFactsStrip(book) {
   const ar = vi.averageRating;
   const rc = vi.ratingsCount;
   if (ar != null && rc) {
-    chips.push(`<span class="sheet-fact-chip">GB ★ ${Number(ar).toFixed(1)} · ${esc(fmtRatingsCount(rc))}</span>`);
+    chips.push(`<span class="sheet-fact-chip">★ ${Number(ar).toFixed(1)} · ${esc(fmtRatingsCount(rc))}</span>`);
   } else if (ar != null) {
-    chips.push(`<span class="sheet-fact-chip">GB ★ ${Number(ar).toFixed(1)}</span>`);
+    chips.push(`<span class="sheet-fact-chip">★ ${Number(ar).toFixed(1)}</span>`);
   }
 
   const catLeaves = [];
@@ -2187,7 +2509,7 @@ function renderSheetShell(book, gen, opts = {}) {
         <div class="sheet-panel-body"><div id="sheet-author-mount">${sheetAuthorSkeleton()}</div></div>
       </section>
 
-      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (Wikipédia, Google Books, catalogues ouverts, IA) — à croiser.</p>
+      <p class="sheet-footnote sheet-footnote--compact">Données agrégées (Wikipédia, Open Library, IA) — à croiser.</p>
     </div>`;
 
   hydrateSheetAuthorZones(book, primaryAuthor(authorRaw), gen);
@@ -2363,14 +2685,13 @@ async function scan() {
   vp.classList.add('scanning');
   refreshScanPixelLayer();
   clearArLayer();
-  expandResultsDrawer();
   setStatus('Étape 1/2 — analyse de l’image…');
   setHint('Envoi du cliché au modèle…');
   showSkeletons();
 
   try {
-    // Phase 1 — Claude identifie et critique (1 seul appel)
-    const books = await callClaude(b64, () => {
+    // Phase 1 — le modèle identifie et critique (1 seul appel)
+    const books = await callVisionBooks(b64, () => {
       setStatus(fastMode ? 'Réponse en cours (mode rapide)…' : 'Réception du modèle…');
     });
     if (!books.length) {
@@ -2380,20 +2701,19 @@ async function scan() {
       return;
     }
 
-    // Phase 1 résultat — repères RA sur l’image ; détail dans le panneau du bas
+    // Phase 1 résultat — repères RA sur l’image ; détail dans la liste après enrichissement
     renderArMarkers(books);
     setStatus(`Étape 2/2 — ${books.length} livre(s), chargement des couvertures…`);
-    setHint('Patience : les fiches complètes arrivent dans le panneau du bas.');
+    setHint('Patience : les fiches complètes arrivent dans la liste.');
 
-    // Phase 2 — couvertures Google Books en parallèle
+    // Phase 2 — couvertures Open Library en parallèle
     const enriched = await Promise.all(
       books.map(async b => ({ ...b, info: await fetchCover(b.title, b.author) }))
     );
     renderCards(enriched);
     patchArMarkersWithCovers(enriched);
-    expandResultsDrawer();
-    setStatus(`${enriched.length} livre(s) — fiches ci-dessous`);
-    setHint('Touchez un livre ou un cadre orange pour ouvrir la fiche (bio auteur, autres titres…).');
+    setStatus(`${enriched.length} livre(s) — voir la liste`);
+    setHint('Touchez un livre dans la liste ou un cadre sur la photo pour ouvrir la fiche (bio auteur, autres titres…).');
 
   } catch (err) {
     showError(err.message || String(err));
@@ -2407,18 +2727,6 @@ async function scan() {
     clearScanPixelLayer();
     scanBtn.disabled = false;
   }
-}
-
-function expandResultsDrawer() {
-  setResultsExpanded(true);
-}
-
-function setResultsExpanded(expanded) {
-  if (!resultsPanel || !resultsDrawerToggle) return;
-  resultsPanel.classList.toggle('collapsed', !expanded);
-  resultsDrawerToggle.setAttribute('aria-expanded', String(expanded));
-  applySplitLayout();
-  scheduleArReflow();
 }
 
 const CONF_DOT = { high: '#4ade80', medium: '#fbbf24', low: '#9ca3af' };
@@ -2708,14 +3016,19 @@ async function runBookSearchFromUi() {
   }
   searchUiRequestGen += 1;
   const gen = searchUiRequestGen;
+  searchCatalogAbort?.abort();
+  const ac = new AbortController();
+  searchCatalogAbort = ac;
+  const OL_SEARCH_MS = 28000;
+  const tid = setTimeout(() => ac.abort(), OL_SEARCH_MS);
   setSearchHint('Recherche dans le catalogue…', { show: true, error: false });
   if (searchSubmitBtn) searchSubmitBtn.disabled = true;
   searchEmpty?.classList.add('hidden');
   renderSearchResultCards([]);
   try {
-    const items = await fetchBooksSearch(q);
+    const items = await fetchBooksSearch(q, { signal: ac.signal });
     if (gen !== searchUiRequestGen) return;
-    const books = items.map(googleVolumeToBook);
+    const books = items.map(catalogVolumeToBook);
     if (!books.length) {
       setSearchHint('Aucun livre trouvé — essayez d’autres mots ou un autre auteur.', { show: true, error: false });
       renderSearchResultCards([]);
@@ -2727,9 +3040,17 @@ async function runBookSearchFromUi() {
     renderSearchResultCards(books);
   } catch (e) {
     if (gen !== searchUiRequestGen) return;
-    setSearchHint(e?.message || 'Erreur réseau.', { show: true, error: true });
+    const aborted = e && (e.name === 'AbortError' || e.name === 'TimeoutError');
+    setSearchHint(
+      aborted
+        ? 'Délai dépassé ou recherche annulée — Open Library est parfois lent. Réessayez.'
+        : (e?.message || 'Erreur réseau.'),
+      { show: true, error: true }
+    );
     renderSearchResultCards([]);
   } finally {
+    clearTimeout(tid);
+    if (searchCatalogAbort === ac) searchCatalogAbort = null;
     if (gen === searchUiRequestGen && searchSubmitBtn) searchSubmitBtn.disabled = false;
   }
 }
@@ -2751,7 +3072,7 @@ function stars(n) {
   return '★'.repeat(r) + '☆'.repeat(5 - r);
 }
 
-function renderCards(books) {
+function renderCards(books, revealResults = true) {
   cachedEnrichedBooks = books;
   resultsList.innerHTML = '';
   resultsLabel.textContent = `${books.length} livre(s)`;
@@ -2808,7 +3129,10 @@ function renderCards(books) {
         </div>
       </article>`);
   });
-  applySplitLayout();
+  if (revealResults) {
+    showResultsScreen();
+    scrollPanelToTop(resultsList, true);
+  }
   scheduleArReflow();
 }
 
@@ -2865,11 +3189,6 @@ document.addEventListener('keydown', e => {
     closeSettings();
     return;
   }
-  if (isSearchScreenActive()) {
-    showScanScreen();
-    setAppDockTab('scan');
-    return;
-  }
   const sheet = $('book-sheet');
   if (sheet && !sheet.classList.contains('hidden')) {
     if (bookSheetHistoryStack.length) {
@@ -2877,6 +3196,16 @@ document.addEventListener('keydown', e => {
       return;
     }
     closeBookSheet();
+    return;
+  }
+  if (isResultsScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
+    return;
+  }
+  if (isSearchScreenActive()) {
+    showScanScreen();
+    setAppDockTab('scan');
     return;
   }
 });
@@ -2895,7 +3224,6 @@ function showSkeletons(n = 3) {
         <div class="sk" style="height:11px;width:75%;border-radius:5px"></div>
       </div>
     </div>`).join('');
-  applySplitLayout();
   scheduleArReflow();
 }
 
@@ -2903,20 +3231,19 @@ function showEmpty(msg) {
   resultsList.innerHTML = `<p class="empty-hint">${esc(msg)}</p>`;
   resultsLabel.textContent = 'Aucun résultat';
   resultsPanel.classList.remove('has-results');
-  applySplitLayout();
+  showScanScreen();
   scheduleArReflow();
 }
 
 function showError(msg) {
   resultsPanel.classList.add('has-results');
-  expandResultsDrawer();
   resultsLabel.textContent = 'Erreur';
   resultsList.innerHTML = `
     <div class="error-box">
       <p class="empty-hint error-msg">${esc(msg)}</p>
       <button type="button" class="btn-retry" id="retry-scan-btn">Réessayer</button>
     </div>`;
-  applySplitLayout();
+  showResultsScreen();
   scheduleArReflow();
 }
 
@@ -2965,13 +3292,97 @@ function resetPhotoState() {
   setHint('');
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Settings ─────────────────────────────────────────────────────────────────-
+function refillModelSelectForProvider(provider) {
+  if (!modelSel) return;
+  modelSel.innerHTML = '';
+  for (const [value, label] of LLM_MODEL_OPTIONS[provider]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    modelSel.appendChild(opt);
+  }
+  const m = pickModelForProvider(provider);
+  let ok = [...modelSel.options].some(o => o.value === m);
+  if (!ok && provider === 'anthropic' && typeof m === 'string' && m.startsWith('claude-')) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = `${m} (stockage)`;
+    modelSel.appendChild(opt);
+    ok = true;
+  }
+  modelSel.value = ok ? m : (modelSel.options[0]?.value ?? DEFAULT_LLM_MODEL[provider]);
+}
+
+function getSettingsProvider() {
+  const el = document.querySelector('input[name="bl-provider"]:checked');
+  const v = el?.value;
+  return LLM_PROVIDERS.includes(/** @type {any} */ (v)) ? /** @type {LlmProvider} */ (v) : 'anthropic';
+}
+
+function setSettingsProvider(p) {
+  document.querySelectorAll('input[name="bl-provider"]').forEach(r => {
+    r.checked = r.value === p;
+  });
+}
+
+function applyProviderSettingsUi(provider) {
+  if (apiKeyLabel) {
+    apiKeyLabel.textContent =
+      provider === 'anthropic' ? 'Clé API Anthropic'
+        : provider === 'openai' ? 'Clé API OpenAI'
+          : 'Clé API Google AI (Gemini)';
+    apiKeyLabel.setAttribute('for', 'api-key-input');
+  }
+  if (keyPortalLink) {
+    if (provider === 'anthropic') {
+      keyPortalLink.href = 'https://console.anthropic.com/settings/keys';
+    } else if (provider === 'openai') {
+      keyPortalLink.href = 'https://platform.openai.com/api-keys';
+    } else {
+      keyPortalLink.href = 'https://aistudio.google.com/apikey';
+    }
+    keyPortalLink.textContent = 'Obtenir une clé →';
+  }
+  if (apiKeyHelp) {
+    if (provider === 'anthropic') {
+      apiKeyHelp.innerHTML = 'Stockée uniquement dans ce navigateur. Besoin d’aide ? <a href="https://docs.anthropic.com/" target="_blank" rel="noopener">Documentation Anthropic</a>';
+    } else if (provider === 'openai') {
+      apiKeyHelp.innerHTML = 'Si les scans échouent depuis <code>file://</code>, lancez un petit serveur local (<code>python -m http.server</code>). <a href="https://platform.openai.com/docs/guides/text-generation" target="_blank" rel="noopener">Aide OpenAI</a>';
+    } else {
+      apiKeyHelp.innerHTML = 'Créez une clé dans Google AI Studio ; elle sert aux appels <code>generateContent</code>. <a href="https://ai.google.dev/gemini-api/docs" target="_blank" rel="noopener">Doc Gemini API</a>';
+    }
+  }
+  if (apiKeyIn) {
+    apiKeyIn.placeholder =
+      provider === 'anthropic' ? 'sk-ant-api03-…'
+        : provider === 'openai' ? 'sk-proj-… ou sk-…'
+          : 'Clé API (AIza…)';
+  }
+}
+
+function syncSettingsModalFromState() {
+  setSettingsProvider(llmProvider);
+  refillModelSelectForProvider(llmProvider);
+  if (modelSel && [...modelSel.options].some(o => o.value === model)) modelSel.value = model;
+  applyProviderSettingsUi(llmProvider);
+}
+
+function discardSettingsChanges() {
+  apiKeyIn.value = apiKey;
+  apiKeyIn.type = 'password';
+  if (toggleKeyBtn) toggleKeyBtn.textContent = 'Afficher';
+  syncSettingsModalFromState();
+  if (fastModeCheck) fastModeCheck.checked = fastMode;
+  closeSettings();
+}
+
 function openSettings() {
   showScanScreen();
   apiKeyIn.value = apiKey;
   apiKeyIn.type = 'password';
   if (toggleKeyBtn) toggleKeyBtn.textContent = 'Afficher';
-  modelSel.value   = model;
+  syncSettingsModalFromState();
   if (fastModeCheck) fastModeCheck.checked = fastMode;
   modal.classList.remove('hidden');
   setAppDockTab('settings');
@@ -3020,6 +3431,7 @@ function esc(s) {
 function onMainButtonClick() {
   if (busy) return;
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   if (!uploadedImg) {
     fileInputCamera?.click();
@@ -3029,13 +3441,9 @@ function onMainButtonClick() {
 }
 
 scanBtn.addEventListener('click', onMainButtonClick);
-resultsDrawerToggle?.addEventListener('click', () => {
-  const wasCollapsed = resultsPanel.classList.contains('collapsed');
-  setResultsExpanded(wasCollapsed);
-  if (!wasCollapsed && appDockTab === 'history') setAppDockTab('scan');
-});
 uploadBtn.addEventListener('click', () => {
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   fileInputGallery?.click();
 });
@@ -3045,6 +3453,7 @@ previewBack.addEventListener('click', resetPhotoState);
 viewportEmpty?.addEventListener('click', () => {
   if (busy) return;
   if (isSearchScreenActive()) showScanScreen();
+  if (isResultsScreenActive()) showScanScreen();
   setAppDockTab('scan');
   fileInputCamera?.click();
 });
@@ -3062,17 +3471,32 @@ clearBtn.addEventListener('click', () => {
 settingsBtn.addEventListener('click', openSettings);
 dockHistoryBtn?.addEventListener('click', () => openHistoryFromDock());
 dockSearchBtn?.addEventListener('click', () => openSearchScreen());
-backdrop.addEventListener('click', closeSettings);
+backdrop.addEventListener('click', () => discardSettingsChanges());
 toggleKeyBtn?.addEventListener('click', () => {
   const show = apiKeyIn.type === 'password';
   apiKeyIn.type = show ? 'text' : 'password';
   toggleKeyBtn.textContent = show ? 'Masquer' : 'Afficher';
 });
+providerFieldset?.addEventListener('change', e => {
+  const t = /** @type {HTMLInputElement|null} */ (e.target);
+  if (!t || t.name !== 'bl-provider') return;
+  const p = /** @type {LlmProvider} */ (t.value);
+  if (!LLM_PROVIDERS.includes(p)) return;
+  refillModelSelectForProvider(p);
+  applyProviderSettingsUi(p);
+});
+
+cancelSettingsBtn?.addEventListener('click', () => discardSettingsChanges());
+
 saveBtn.addEventListener('click', () => {
+  const nextProv = getSettingsProvider();
+  llmProvider = LLM_PROVIDERS.includes(nextProv) ? nextProv : 'anthropic';
   apiKey   = apiKeyIn.value.trim();
-  model    = modelSel.value;
+  model    = modelSel?.value || pickModelForProvider(llmProvider);
   fastMode = !!(fastModeCheck && fastModeCheck.checked);
+  localStorage.setItem('bl_provider', llmProvider);
   localStorage.setItem('bl_key',      apiKey);
+  localStorage.setItem(llmModelStorageKey(llmProvider), model);
   localStorage.setItem('bl_model',    model);
   localStorage.setItem('bl_fast',     fastMode ? '1' : '0');
   closeSettings();
@@ -3088,7 +3512,6 @@ arLayer.addEventListener('click', e => {
   const m = e.target.closest('.ar-marker');
   if (!m) return;
   const idx = parseInt(m.dataset.bookIdx, 10);
-  expandResultsDrawer();
   if (Number.isFinite(idx) && cachedEnrichedBooks[idx]) openBookSheet(idx);
 });
 
@@ -3098,17 +3521,14 @@ arResizeRo.observe(arLayer);
 arResizeRo.observe(previewEl);
 
 window.visualViewport?.addEventListener('resize', () => {
-  applySplitLayout();
   scheduleArReflow();
 });
 window.addEventListener('orientationchange', () => {
   setTimeout(() => {
-    applySplitLayout();
     scheduleArReflow();
   }, 180);
 });
 
-initSplitPaneResize();
 
 function initPhotoZoomHandlers() {
   if (!zoomRoot || !zoomPan || !zoomScaler) return;
@@ -3237,6 +3657,7 @@ document.addEventListener('paste', e => {
   const item = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));
   if (item) {
     if (isSearchScreenActive()) showScanScreen();
+    if (isResultsScreenActive()) showScanScreen();
     setAppDockTab('scan');
     loadFile(item.getAsFile());
   }
@@ -3287,6 +3708,8 @@ bookSearchInput?.addEventListener('input', () => {
   if (q.length < 2) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
+    searchCatalogAbort?.abort();
+    searchCatalogAbort = null;
     searchUiRequestGen += 1;
     setSearchHint('', { show: false });
     renderSearchResultCards([]);
@@ -3309,6 +3732,8 @@ searchClearBtn?.addEventListener('click', () => {
   if (bookSearchInput) bookSearchInput.value = '';
   clearTimeout(searchDebounceTimer);
   searchDebounceTimer = null;
+  searchCatalogAbort?.abort();
+  searchCatalogAbort = null;
   searchUiRequestGen += 1;
   updateSearchChrome();
   setSearchHint('', { show: false });
@@ -3419,4 +3844,93 @@ window.addEventListener('storage', e => {
   refreshWishlistDependentUi();
 });
 
+/** Raccourcis PWA / liens profonds : `?bl_tab=scan|search|history|settings|wishlist` */
+function applyPwaLaunchParamsFromUrl() {
+  let params;
+  try {
+    params = new URLSearchParams(window.location.search || '');
+  } catch {
+    return;
+  }
+  const tab = (params.get('bl_tab') || '').toLowerCase();
+  if (!tab) return;
+  if (tab === 'search') openSearchScreen();
+  else if (tab === 'history') openHistoryFromDock();
+  else if (tab === 'settings') openSettings();
+  else if (tab === 'wishlist' || tab === 'bookmark' || tab === 'liste') {
+    closeSettings();
+    openWishlistModal();
+  } else if (tab === 'scan') {
+    closeWishlistModal();
+    closeSettings();
+    showScanScreen();
+    setAppDockTab('scan');
+  }
+  params.delete('bl_tab');
+  const q = params.toString();
+  const path = window.location.pathname || '/';
+  try {
+    history.replaceState(null, '', q ? `${path}?${q}` : path);
+  } catch {
+    /* noop */
+  }
+}
+
+function hidePwaUpdateBar() {
+  $('pwa-update-bar')?.classList.add('hidden');
+}
+
+function showPwaUpdateBar() {
+  $('pwa-update-bar')?.classList.remove('hidden');
+}
+
+function wirePwaServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  const applyBtn = $('pwa-update-apply');
+  const dismissBtn = $('pwa-update-dismiss');
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!sessionStorage.getItem('bl_sw_reload_pending')) return;
+    sessionStorage.removeItem('bl_sw_reload_pending');
+    window.location.reload();
+  });
+
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register(new URL('./sw.js', window.location.href).href)
+      .then((reg) => {
+        const wireWaiting = () => {
+          if (reg.waiting) showPwaUpdateBar();
+          else hidePwaUpdateBar();
+        };
+        wireWaiting();
+        reg.addEventListener('updatefound', () => {
+          const inst = reg.installing;
+          inst?.addEventListener('statechange', () => {
+            if (inst.state === 'installed') wireWaiting();
+          });
+        });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') void reg.update();
+        });
+        applyBtn?.addEventListener('click', () => {
+          if (!reg.waiting) return;
+          try {
+            sessionStorage.setItem('bl_sw_reload_pending', '1');
+          } catch {
+            /* noop */
+          }
+          reg.waiting.postMessage('SKIP_WAITING');
+        });
+        dismissBtn?.addEventListener('click', () => hidePwaUpdateBar());
+      })
+      .catch(() => {});
+  });
+}
+
+syncFlowInert('scan');
 setAppDockTab('scan');
+syncSettingsModalFromState();
+applyPwaLaunchParamsFromUrl();
+wirePwaServiceWorker();

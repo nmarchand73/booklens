@@ -4,12 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5">
   <meta name="theme-color" content="#000000">
+  <meta name="description" content="BookLens — scan de tranches, fiches livres et avis. Votre clé API reste sur l’appareil (BYOK).">
+  <link rel="manifest" href="site.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-title" content="BookLens">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@9..144,500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
   <link rel="preconnect" href="https://api.anthropic.com" crossorigin>
-  <link rel="dns-prefetch" href="https://www.googleapis.com">
+  <link rel="preconnect" href="https://api.openai.com" crossorigin>
+  <link rel="preconnect" href="https://generativelanguage.googleapis.com" crossorigin>
   <link rel="dns-prefetch" href="https://openlibrary.org">
+  <link rel="dns-prefetch" href="https://covers.openlibrary.org">
   <link rel="dns-prefetch" href="https://fr.wikipedia.org">
   <link rel="dns-prefetch" href="https://en.wikipedia.org">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -19,34 +25,89 @@
 </head>
 <body>
 
+<div id="pwa-update-bar" class="pwa-update-bar hidden" role="status" aria-live="polite">
+  <span class="pwa-update-bar-text">Une nouvelle version de BookLens est prête.</span>
+  <button type="button" id="pwa-update-apply" class="pwa-update-bar-btn">Mettre à jour</button>
+  <button type="button" id="pwa-update-dismiss" class="pwa-update-bar-dismiss" aria-label="Plus tard">×</button>
+</div>
+
 <div id="settings-modal" class="modal hidden">
   <div class="modal-backdrop" id="modal-backdrop"></div>
-  <div class="modal-sheet">
+  <div class="modal-sheet modal-sheet--settings">
     <div class="sheet-handle"></div>
-    <h2>Paramètres</h2>
-    <div class="field">
-      <label for="api-key-input">Clé API Anthropic</label>
-      <div class="api-key-row">
-        <input type="password" id="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false">
-        <button type="button" id="toggle-key-btn" class="btn-secondary-ghost" title="Afficher ou masquer la clé">Afficher</button>
+    <header class="settings-header">
+      <h2>Paramètres</h2>
+      <p class="settings-lead">Bring your own key : choisissez un fournisseur, collez votre clé, puis le modèle. Rien n’est envoyé à BookLens — seulement du navigateur vers l’API choisie.</p>
+    </header>
+
+    <div class="settings-scroll">
+      <fieldset class="settings-fieldset" id="provider-fieldset" aria-describedby="provider-fieldset-hint">
+        <legend class="settings-legend"><span class="settings-step">1</span> Fournisseur</legend>
+        <p class="settings-hint" id="provider-fieldset-hint">Touchez une option — les champs ci-dessous s’adaptent.</p>
+        <div class="provider-cards">
+          <label class="provider-card">
+            <input type="radio" name="bl-provider" value="anthropic">
+            <span class="provider-card-inner">
+              <span class="provider-card-badge" aria-hidden="true">Claude</span>
+              <span class="provider-card-title">Anthropic</span>
+              <span class="provider-card-desc">Vision + texte, appels navigateur supportés</span>
+            </span>
+          </label>
+          <label class="provider-card">
+            <input type="radio" name="bl-provider" value="openai">
+            <span class="provider-card-inner">
+              <span class="provider-card-badge" aria-hidden="true">GPT</span>
+              <span class="provider-card-title">OpenAI</span>
+              <span class="provider-card-desc">4o / 4o mini — servez la page en HTTP si CORS bloque</span>
+            </span>
+          </label>
+          <label class="provider-card">
+            <input type="radio" name="bl-provider" value="gemini">
+            <span class="provider-card-inner">
+              <span class="provider-card-badge" aria-hidden="true">Gemini</span>
+              <span class="provider-card-title">Google AI</span>
+              <span class="provider-card-desc">Flash ou Pro via AI Studio</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="settings-block">
+        <div class="settings-block-head">
+          <span class="settings-legend settings-legend--inline"><span class="settings-step">2</span> Clé API</span>
+          <a class="btn-key-portal" id="key-portal-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">Obtenir une clé →</a>
+        </div>
+        <label for="api-key-input" id="api-key-label" class="settings-sublabel">Clé API Anthropic</label>
+        <div class="api-key-row">
+          <input type="password" id="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off">
+          <button type="button" id="toggle-key-btn" class="btn-secondary-ghost" title="Afficher ou masquer la clé">Afficher</button>
+        </div>
+        <p class="settings-help" id="api-key-help">Stockée uniquement dans ce navigateur (<code>localStorage</code>). <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Console Anthropic</a></p>
       </div>
-      <small>Stockée localement dans le navigateur. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Créer une clé →</a></small>
+
+      <div class="settings-block">
+        <label class="settings-legend settings-legend--block" for="model-select"><span class="settings-step">3</span> Modèle</label>
+        <p class="settings-hint">Équilibre coût / qualité / vitesse selon votre usage.</p>
+        <select id="model-select" aria-describedby="model-hint"></select>
+        <p class="settings-help" id="model-hint">Le choix est mémorisé pour ce fournisseur.</p>
+      </div>
+
+      <div class="settings-block settings-block--compact">
+        <label class="settings-legend settings-legend--block" for="fast-mode-check"><span class="settings-step">4</span> Vitesse</label>
+        <div class="field field-row field-row--settings">
+          <label class="checkbox-label">
+            <input type="checkbox" id="fast-mode-check">
+            <span>Mode réactivité</span>
+          </label>
+          <small>Même image JPEG allégée et même plafond de tokens pour <strong>Anthropic</strong>, <strong>OpenAI</strong> et <strong>Gemini</strong> ; le prompt demande aussi des réponses plus courtes. Le gain réel dépend du modèle, du réseau et du nombre de livres — combinez avec un modèle « mini » / Flash / Haiku pour aller vite.</small>
+        </div>
+      </div>
     </div>
-    <div class="field">
-      <label>Modèle Claude</label>
-      <select id="model-select">
-        <option value="claude-haiku-4-5-20251001">Haiku 4.5 — rapide &amp; économique</option>
-        <option value="claude-sonnet-4-6" selected>Sonnet 4.6</option>
-      </select>
+
+    <div class="settings-footer">
+      <button type="button" id="cancel-settings-btn" class="btn-settings-secondary">Annuler</button>
+      <button type="button" id="save-settings-btn" class="btn-primary btn-settings-primary">Enregistrer</button>
     </div>
-    <div class="field field-row">
-      <label class="checkbox-label">
-        <input type="checkbox" id="fast-mode-check">
-        <span>Mode réactivité</span>
-      </label>
-      <small>Image plus légère et réponses plus courtes — souvent ~30–50&nbsp;% plus rapide. Combinez avec <strong>Haiku 4.5</strong> pour le maximum de vitesse.</small>
-    </div>
-    <button type="button" id="save-settings-btn" class="btn-primary">Enregistrer</button>
   </div>
 </div>
 
@@ -64,7 +125,7 @@
 
   <div id="split-root" class="split-root">
     <div id="split-top" class="split-top">
-  <div id="screen-scan" class="screen-scan">
+  <div id="screen-scan" class="screen-scan split-flow-layer split-flow-layer--active" aria-hidden="false">
   <div id="viewport">
     <div id="viewport-empty" class="viewport-empty" aria-hidden="false">
       <div class="viewport-empty-inner">
@@ -135,12 +196,12 @@
   </div>
   </div><!-- /screen-scan -->
 
-  <div id="screen-search" class="screen-search hidden" aria-hidden="true">
+  <div id="screen-search" class="screen-search split-flow-layer" aria-hidden="true">
     <div class="search-screen-inner">
       <div class="search-panel-head">
         <p class="search-panel-kicker">Catalogue</p>
         <h2 class="search-panel-title">Rechercher un livre</h2>
-        <p class="search-panel-lead">Titre, auteur ou quelques mots-clés — les résultats viennent de Google&nbsp;Books (couverture, résumé). Les critiques et le profil de lecture s’enrichissent avec votre clé IA, comme après un scan.</p>
+        <p class="search-panel-lead">Titre, auteur ou quelques mots-clés — les résultats viennent d’<a href="https://openlibrary.org" target="_blank" rel="noopener">Open Library</a> (couvertures, métadonnées). Les critiques et le profil de lecture s’enrichissent avec votre clé IA, comme après un scan.</p>
       </div>
       <div class="search-bar-block">
         <label class="search-label" for="book-search-input">Titre ou auteur</label>
@@ -183,38 +244,25 @@
     </div>
   </div>
 
-  </div><!-- /split-top -->
+  <div id="screen-results" class="screen-results split-flow-layer" aria-hidden="true">
+    <div id="results" class="scan-results" aria-label="Fiches livres">
+      <div class="results-toolbar">
+        <p id="results-label" class="results-toolbar-title">Aucun résultat</p>
+        <button type="button" id="clear-btn" class="btn-text-clear">Effacer</button>
+      </div>
+      <div id="results-panel-body" class="results-panel-body">
+        <div id="results-list">
+          <p class="empty-hint">Envoyez une photo de rayon pour découvrir les critiques</p>
+        </div>
+        <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
+      </div>
+    </div>
+  </div>
 
-  <div
-    id="split-gutter"
-    class="split-gutter"
-    role="separator"
-    aria-orientation="horizontal"
-    aria-label="Redimensionner la zone photo et la zone résultats. Flèche bas : plus de résultats ; flèche haut : plus de photo."
-    aria-valuemin="8"
-    aria-valuemax="92"
-    tabindex="0"
-  ></div>
+  </div><!-- /split-top -->
 
   <input type="file" id="file-input-camera" accept="image/*" capture="environment" class="hidden">
   <input type="file" id="file-input-gallery" accept="image/*" class="hidden">
-
-  <div id="results" class="results-drawer" aria-label="Fiches livres">
-    <div class="results-drawer-head">
-      <button type="button" id="results-drawer-toggle" class="results-drawer-toggle" aria-expanded="true" aria-controls="results-panel-body">
-        <span class="drawer-grip" aria-hidden="true"></span>
-        <span id="results-label" class="results-drawer-title">Aucun résultat</span>
-        <span class="drawer-chevron" aria-hidden="true">⌄</span>
-      </button>
-      <button type="button" id="clear-btn" class="btn-text-clear">Effacer</button>
-    </div>
-    <div id="results-panel-body" class="results-panel-body">
-      <div id="results-list">
-        <p class="empty-hint">Envoyez une photo de rayon pour découvrir les critiques</p>
-      </div>
-      <p class="ai-disclaimer" role="note">Les critiques sont générées par IA ; croisez avec vos goûts et les avis humains.</p>
-    </div>
-  </div>
 
   <nav id="app-dock" class="app-dock" aria-label="Navigation principale">
     <div class="app-dock-inner">
@@ -272,7 +320,7 @@
     </div>
     <div class="app-dock-home-indicator" aria-hidden="true"></div>
   </nav>
-  </div>
+  </div><!-- /split-root -->
 </div>
 
 <!-- Fiche livre plein écran (mobile) -->
